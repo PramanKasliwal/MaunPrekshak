@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List
+from typing import List, Optional
 from maunprekshak.scanner.report import SecretFinding, Severity
 
 # Secret patterns
