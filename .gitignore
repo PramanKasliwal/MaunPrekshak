@@ -30,4 +30,3 @@ env/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-tests/test_secrets.py
