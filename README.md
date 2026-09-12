@@ -30,7 +30,20 @@
 pip install maunprekshak
 ```
 
-### Basic Scan
+### 🐧 Linux (1-Line Standalone Install — No Python Required)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/PramanKasliwal/maunprekshak/main/install.sh | bash
+```
+
+### 🐍 Via PyPI (Any OS)
+```bash
+pip install maunprekshak
+# or using pipx (recommended for Ubuntu 24.04+)
+pipx install maunprekshak
+```
+
+Basic Scan
 
 Scan the current directory:
 

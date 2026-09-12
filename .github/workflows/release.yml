@@ -1,0 +1,43 @@
+name: Release Standalone Linux Binary
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build_linux_binary:
+    name: Build Linux x86_64 Executable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Needed to create releases and upload assets
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Compile Standalone Linux Binary
+        run: |
+          pyinstaller --onefile \
+            --name mp-linux-x86_64 \
+            --clean \
+            maunprekshak/cli/main.py
+
+      - name: Publish GitHub Release & Upload Binary
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/mp-linux-x86_64
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
