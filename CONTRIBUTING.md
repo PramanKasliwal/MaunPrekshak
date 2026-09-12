@@ -8,7 +8,7 @@ Thank you for your interest in making Python codebases safer! We welcome contrib
 
 1. **Fork & Clone** the repository:
    ```bash
-   git clone https://github.com/cr4ckb0x/maunprekshak.git
+   git clone https://github.com/PramanKasliwal/maunprekshak.git
    cd maunprekshak
    ```
 
@@ -59,4 +59,4 @@ Before opening a pull request, please ensure:
 
 ## 🔒 Reporting Security Vulnerabilities
 
-If you discover a security vulnerability in MaunPrekshak itself, please **do not open a public GitHub issue**. Instead, email us directly at `security@maunprekshak.dev` or use GitHub's private vulnerability reporting feature.
+If you discover a security vulnerability in MaunPrekshak itself, please **do not open a public GitHub issue**. Instead, use GitHub's private vulnerability reporting feature.
