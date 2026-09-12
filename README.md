@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI version](https://badge.fury.io/py/maunprekshak.svg)](https://badge.fury.io/py/maunprekshak)
-[![CI Tests](https://github.com/cr4ckb0x/maunprekshak/actions/workflows/ci.yml/badge.svg)](https://github.com/cr4ckb0x/maunprekshak/actions)
+[![CI Tests](https://github.com/PramanKasliwal/maunprekshak/actions/workflows/ci.yml/badge.svg)](https://github.com/PramanKasliwal/maunprekshak/actions)
 
 **MaunPrekshak** (मौन = *Silent*, प्रेक्षक = *Observer*) is a fast, privacy-first Python security toolkit designed to catch vulnerabilities, exposed credentials, and insecure code patterns right in your terminal.
 
@@ -123,7 +123,7 @@ Get a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 We welcome community contributions! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
-- Found a bug or missing a secret pattern? [Open an Issue](https://github.com/cr4ckb0x/maunprekshak/issues).
+- Found a bug or missing a secret pattern? [Open an Issue](https://github.com/PramanKasliwal/maunprekshak/issues).
 - Want to contribute a new SAST check? PRs are warmly welcomed!
 
 ---
