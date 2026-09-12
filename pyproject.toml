@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "The Silent Observer — Open-source Python security scanner for dependencies, secrets & insecure code"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "Praman Kasliwal", email = "praman@maunprekshak.dev" }]
+authors = [{ name = "Praman Kasliwal", email = "kasliwal.praman008@gmail.com" }]
 keywords = ["security", "python", "vulnerability", "scanner", "sast", "secrets", "cve", "osv"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -49,7 +49,7 @@ mp = "maunprekshak.cli.main:app"
 maunprekshak = "maunprekshak.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/cr4ckb0x/maunprekshak"
-Repository = "https://github.com/cr4ckb0x/maunprekshak"
-Issues = "https://github.com/cr4ckb0x/maunprekshak/issues"
-Documentation = "https://github.com/cr4ckb0x/maunprekshak#readme"
+Homepage = "https://github.com/PramanKasliwal/maunprekshak"
+Repository = "https://github.com/PramanKasliwal/maunprekshak"
+Issues = "https://github.com/PramanKasliwal/maunprekshak/issues"
+Documentation = "https://github.com/PramanKasliwal/maunprekshak#readme"
