@@ -28,9 +28,9 @@ def scan(
     no_ai: bool = typer.Option(False, help="Skip Gemini AI summary generation"),
     exclude: str = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
 ):
-    """Scan a Python project for security vulnerabilities, secrets, and insecure patterns."""
+    exclude_list = [e.strip() for e in exclude.split(",") if e.strip()] if exclude else None
     with console.status("[bold green]Scanning project...") as status:
-        result = scan_project(path)
+        result = scan_project(path, exclude=exclude_list, only=only)
         
         if not no_ai:
             status.update("[bold green]Generating AI summary...")

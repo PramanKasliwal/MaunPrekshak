@@ -49,7 +49,7 @@ SELF_EXCLUDE_FILES = {
 }
 
 
-def scan_secrets(path: str) -> List[SecretFinding]:
+def scan_secrets(path: str, exclude: Optional[List[str]] = None) -> List[SecretFinding]:
     """
     Scan all source and config files for hardcoded secrets and credentials.
     Suppresses common false positives (os.getenv, placeholders).
@@ -58,8 +58,12 @@ def scan_secrets(path: str) -> List[SecretFinding]:
 
     exclude_dirs = {
         "node_modules", ".git", "__pycache__", "venv", ".venv",
-        "dist", "build", ".eggs", "site-packages",
+        "dist", "build", ".eggs", "site-packages", "tests", "test",
+        "testing", "fixtures",
     }
+    if exclude:
+        exclude_dirs.update(exclude)
+
     valid_extensions = {".py", ".yaml", ".yml", ".json", ".cfg", ".ini", ".toml", ".pem", ".key"}
     compiled_patterns = {name: re.compile(pattern) for name, pattern in PATTERNS.items()}
 

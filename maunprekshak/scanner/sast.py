@@ -158,6 +158,17 @@ class SecurityVisitor(ast.NodeVisitor):
 
     def visit_Assert(self, node: ast.Assert) -> None:
         """MP010 — assert used for security checks (stripped in optimized mode)."""
+        # Skip assert statements in test files (tests use assertions legitimately)
+        base_name = os.path.basename(self.file_path)
+        path_parts = set(self.file_path.replace("\\", "/").split("/"))
+        if (
+            base_name.startswith("test_")
+            or base_name.endswith("_test.py")
+            or bool(path_parts & {"tests", "test", "testing", "fixtures"})
+        ):
+            self.generic_visit(node)
+            return
+
         self._add(node, "MP010", Severity.LOW.value,
                   "assert statement: assertions are stripped when Python runs with -O (optimized)",
                   "Do not use assert for security validation. Use explicit if checks with exceptions.")
@@ -179,25 +190,30 @@ class SecurityVisitor(ast.NodeVisitor):
 
 EXCLUDE_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
-    "dist", "build", ".eggs", "site-packages",
+    "dist", "build", ".eggs", "site-packages", "tests", "test",
+    "testing", "fixtures",
 }
 
 
-def scan_sast(path: str) -> List[SASTFinding]:
+def scan_sast(path: str, exclude: Optional[List[str]] = None) -> List[SASTFinding]:
     """
     Scan all Python files in the project directory for security issues.
 
     Args:
         path: Absolute path to the project root directory.
+        exclude: Optional list of additional directories to exclude.
 
     Returns:
         List of SASTFinding objects, sorted by severity then file/line.
     """
     findings: List[SASTFinding] = []
+    active_excludes = set(EXCLUDE_DIRS)
+    if exclude:
+        active_excludes.update(exclude)
 
     for root, dirs, files in os.walk(path):
         # Skip excluded directories in-place
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        dirs[:] = [d for d in dirs if d not in active_excludes]
 
         for filename in files:
             if not filename.endswith(".py"):
