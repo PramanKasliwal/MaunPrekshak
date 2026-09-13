@@ -65,3 +65,9 @@ jobs:
       - name: MaunPrekshak Dogfooding Self-Scan
         run: |
           mp scan . --ci --fail-on high --no-ai --exclude tests
+
+      - name: Verify SARIF Export & Config Initialization
+        run: |
+          mp init --path /tmp
+          mp scan . --output sarif --output-file /tmp/test-results.sarif --no-ai
+          test -s /tmp/test-results.sarif

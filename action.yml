@@ -1,0 +1,55 @@
+name: 'MaunPrekshak Security Scanner'
+description: 'Fast, privacy-first Python security scanner for dependency CVEs, exposed secrets, and AST code vulnerabilities'
+author: 'Praman Kasliwal'
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: 'Directory path to scan'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Fail CI if severity threshold is breached: critical, high, medium, low'
+    required: false
+    default: 'high'
+  output:
+    description: 'Output format: console, json, markdown, sarif'
+    required: false
+    default: 'sarif'
+  sarif-file:
+    description: 'Path where SARIF report will be saved'
+    required: false
+    default: 'results.sarif'
+  no-ai:
+    description: 'Disable AI remediation summary (default: true for CI)'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install MaunPrekshak
+      shell: bash
+      run: python -m pip install --upgrade maunprekshak
+
+    - name: Run MaunPrekshak Scan
+      shell: bash
+      run: |
+        EXTRA_FLAGS=""
+        if [ "${{ inputs.no-ai }}" = "true" ]; then
+          EXTRA_FLAGS="--no-ai"
+        fi
+        
+        mp scan "${{ inputs.path }}" \
+          --ci \
+          --fail-on "${{ inputs.fail-on }}" \
+          --output "${{ inputs.output }}" \
+          --output-file "${{ inputs.sarif-file }}" \
+          $EXTRA_FLAGS

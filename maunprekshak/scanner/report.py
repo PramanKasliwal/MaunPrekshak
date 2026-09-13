@@ -354,3 +354,180 @@ def to_pdf(scan_result: ScanResult, output_path: str) -> None:
 
     except ImportError:
         print("[Warning] reportlab not installed — PDF generation skipped. Run: pip install reportlab")
+
+
+def to_sarif(scan_result: ScanResult, project_root: str = ".") -> str:
+    """
+    Serialize scan result to OASIS SARIF 2.1.0 format.
+    Compatible with GitHub Advanced Security / Code Scanning.
+    """
+    rules_dict = {}
+    results_list = []
+
+    level_map = {
+        "CRITICAL": "error",
+        "HIGH": "error",
+        "MEDIUM": "warning",
+        "LOW": "note",
+    }
+
+    root = os.path.abspath(project_root)
+
+    def _relpath(p: str) -> str:
+        try:
+            rel = os.path.relpath(os.path.abspath(p), root)
+            if rel.startswith(".."):
+                return os.path.basename(p)
+            return rel.replace("\\", "/")
+        except Exception:
+            return os.path.basename(p)
+
+    # 1. Process SAST findings
+    for s in scan_result.sast:
+        rule_id = s.check_id
+        if rule_id not in rules_dict:
+            rules_dict[rule_id] = {
+                "id": rule_id,
+                "name": f"PythonSAST_{rule_id}",
+                "shortDescription": {"text": s.description},
+                "fullDescription": {
+                    "text": f"{s.description}. Recommendation: {s.recommendation}"
+                },
+                "defaultConfiguration": {
+                    "level": level_map.get(s.severity.upper(), "warning")
+                },
+                "helpUri": "https://github.com/PramanKasliwal/maunprekshak#static-code-analysis-sast",
+            }
+
+        rel_file = _relpath(s.file_path)
+        start_line = max(1, s.line)
+        start_col = max(1, getattr(s, "col", 1))
+
+        results_list.append(
+            {
+                "ruleId": rule_id,
+                "level": level_map.get(s.severity.upper(), "warning"),
+                "message": {
+                    "text": f"{s.description}: {s.recommendation}"
+                },
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {
+                                "uri": rel_file,
+                                "uriBaseId": "%SRCROOT%",
+                            },
+                            "region": {
+                                "startLine": start_line,
+                                "startColumn": start_col,
+                            },
+                        }
+                    }
+                ],
+            }
+        )
+
+    # 2. Process Secret findings
+    for sec in scan_result.secrets:
+        rule_id = f"MP-SECRET-{sec.secret_type.upper().replace(' ', '_').replace('/', '_')}"
+        if rule_id not in rules_dict:
+            rules_dict[rule_id] = {
+                "id": rule_id,
+                "name": "ExposedSecret",
+                "shortDescription": {"text": f"Exposed secret: {sec.secret_type}"},
+                "fullDescription": {
+                    "text": f"Potential hardcoded credential or secret found: {sec.secret_type}. Immediately revoke and rotate this secret."
+                },
+                "defaultConfiguration": {"level": "error"},
+                "helpUri": "https://github.com/PramanKasliwal/maunprekshak#secrets--credential-detection",
+            }
+
+        rel_file = _relpath(sec.file_path)
+        start_line = max(1, sec.line)
+        results_list.append(
+            {
+                "ruleId": rule_id,
+                "level": level_map.get(sec.severity.upper(), "error"),
+                "message": {
+                    "text": f"Exposed {sec.secret_type} detected: {sec.masked_value}"
+                },
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {
+                                "uri": rel_file,
+                                "uriBaseId": "%SRCROOT%",
+                            },
+                            "region": {
+                                "startLine": start_line,
+                                "startColumn": 1,
+                            },
+                        }
+                    }
+                ],
+            }
+        )
+
+    # 3. Process Dependency findings
+    for dep in scan_result.deps:
+        rule_id = f"MP-DEP-{dep.package}"
+        if rule_id not in rules_dict:
+            rules_dict[rule_id] = {
+                "id": rule_id,
+                "name": "VulnerableDependency",
+                "shortDescription": {"text": f"Vulnerable dependency: {dep.package}"},
+                "fullDescription": {
+                    "text": f"Package {dep.package} ({dep.version}) has known vulnerability {dep.cve_id}. {dep.description}"
+                },
+                "defaultConfiguration": {
+                    "level": level_map.get(dep.severity.upper(), "error")
+                },
+                "helpUri": f"https://osv.dev/vulnerability/{dep.cve_id}" if dep.cve_id else "https://osv.dev",
+            }
+
+        msg = f"{dep.package}=={dep.version} is affected by {dep.cve_id}."
+        if dep.fix_version:
+            msg += f" Upgrade to >= {dep.fix_version}."
+
+        results_list.append(
+            {
+                "ruleId": rule_id,
+                "level": level_map.get(dep.severity.upper(), "error"),
+                "message": {"text": msg},
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {
+                                "uri": "requirements.txt",
+                                "uriBaseId": "%SRCROOT%",
+                            },
+                            "region": {
+                                "startLine": 1,
+                                "startColumn": 1,
+                            },
+                        }
+                    }
+                ],
+            }
+        )
+
+    sarif_data = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "MaunPrekshak",
+                        "semanticVersion": "0.2.0",
+                        "informationUri": "https://github.com/PramanKasliwal/maunprekshak",
+                        "rules": list(rules_dict.values()),
+                    }
+                },
+                "results": results_list,
+            }
+        ],
+    }
+
+    return json.dumps(sarif_data, indent=2)
+

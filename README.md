@@ -58,9 +58,12 @@ mp scan .
 mp scan . --no-ai
 ```
 
-### Export Results to JSON or Markdown
+### Export Results to SARIF, JSON, or Markdown
 
 ```bash
+# Export standard OASIS SARIF 2.1.0 for GitHub Code Scanning
+mp scan ./my-project --output sarif --output-file results.sarif
+
 # Export as JSON for pipelines
 mp scan ./my-project --output json > report.json
 
@@ -79,6 +82,80 @@ mp scan . --ci --fail-on high
 ```
 
 ---
+
+## 🐙 GitHub Actions & Code Scanning (SARIF)
+
+Run MaunPrekshak in your GitHub workflow and get native inline alerts in GitHub's **Security ➔ Code Scanning** tab:
+
+```yaml
+name: Security Scan
+
+on: [push, pull_request]
+
+jobs:
+  maunprekshak:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Needed for SARIF upload
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run MaunPrekshak Security Scan
+        uses: PramanKasliwal/maunprekshak@v0.2.0
+        with:
+          fail-on: high
+          output: sarif
+          sarif-file: results.sarif
+
+      - name: Upload to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+```
+
+---
+
+## 🪝 Pre-Commit Hook
+
+Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/PramanKasliwal/maunprekshak
+    rev: v0.2.0
+    hooks:
+      - id: maunprekshak
+        args: ["--fail-on", "high"]
+```
+
+---
+
+## ⚙️ Configuration File (`.maunprekshak.toml`)
+
+Generate a starter configuration file with:
+
+```bash
+mp init
+```
+
+Or customize `.maunprekshak.toml` (or `[tool.maunprekshak]` in `pyproject.toml`):
+
+```toml
+[scanner]
+# Directories to exclude from scans
+exclude = ["tests", "fixtures", ".venv", "node_modules"]
+
+# Default CI failure threshold: "critical", "high", "medium", or "low"
+fail_on = "high"
+
+# Disable Gemini AI remediation (fully offline)
+no_ai = false
+
+# Ignore specific SAST check IDs
+ignore_rules = ["MP010"]
+```
 
 ## 🖥️ Sample Console Output
 

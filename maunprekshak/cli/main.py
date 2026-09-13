@@ -1,41 +1,68 @@
 import typer
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from maunprekshak import __version__
+from maunprekshak.config import load_config, DEFAULT_CONFIG_TEMPLATE
 from maunprekshak.scanner import scan_project
-from maunprekshak.scanner.report import to_json, to_markdown, to_pdf, generate_ai_summary
+from maunprekshak.scanner.report import (
+    to_json,
+    to_markdown,
+    to_pdf,
+    to_sarif,
+    generate_ai_summary,
+    aggregate,
+)
 
 # Auto-load .env from the current directory or any parent directory
-# This means `mp scan .` will pick up .env automatically
 load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
-load_dotenv(override=False)  # Also check current working dir
+load_dotenv(override=False)
 
 app = typer.Typer(help="MaunPrekshak — The Silent Observer")
 console = Console()
 
+
 @app.command()
 def scan(
-    path: str,
-    only: str = typer.Option(None, help="Run only: deps, secrets, sast"),
-    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf"),
-    output_file: str = typer.Option(None, help="Save output to this file path"),
+    path: str = typer.Argument(".", help="Path to project or directory to scan"),
+    only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast"),
+    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif"),
+    output_file: Optional[str] = typer.Option(None, help="Save output to this file path"),
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
-    fail_on: str = typer.Option("critical", help="Fail CI if severity reached: critical, high, medium, low"),
+    fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
     no_ai: bool = typer.Option(False, help="Skip Gemini AI summary generation"),
-    exclude: str = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
+    exclude: Optional[str] = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
 ):
-    exclude_list = [e.strip() for e in exclude.split(",") if e.strip()] if exclude else None
+    """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
+    cfg = load_config(path)
+
+    # Exclusions precedence: CLI flag > .maunprekshak.toml > default
+    if exclude:
+        exclude_list = [e.strip() for e in exclude.split(",") if e.strip()]
+    else:
+        exclude_list = cfg.exclude
+
+    effective_fail_on = fail_on if fail_on is not None else cfg.fail_on
+    effective_no_ai = no_ai or cfg.no_ai
+
     with console.status("[bold green]Scanning project...") as status:
         result = scan_project(path, exclude=exclude_list, only=only)
-        
-        if not no_ai:
+
+        # Apply rule exclusions from config if specified
+        if cfg.ignore_rules:
+            result.sast = [s for s in result.sast if s.check_id not in cfg.ignore_rules]
+            # Recalculate score after ignoring rules
+            recalculated = aggregate(result.deps, result.secrets, result.sast)
+            result.risk_score = recalculated.risk_score
+
+        if not effective_no_ai:
             status.update("[bold green]Generating AI summary...")
             result.ai_summary = generate_ai_summary(result)
-            
+
     if output == "json":
         out_str = to_json(result)
         if output_file:
@@ -50,27 +77,56 @@ def scan(
                 f.write(out_str)
         else:
             print(out_str)
+    elif output == "sarif":
+        out_str = to_sarif(result, project_root=path)
+        if output_file:
+            with open(output_file, "w") as f:
+                f.write(out_str)
+        else:
+            print(out_str)
     elif output == "pdf" and output_file:
         to_pdf(result, output_file)
         console.print(f"[bold green]Saved PDF to {output_file}[/bold green]")
     else:
         # Console output
-        console.print(Panel(f"[bold red]Risk Level: {result.risk_score.level}[/bold red] (Score: {result.risk_score.score})"))
+        console.print(
+            Panel(
+                f"[bold red]Risk Level: {result.risk_score.level}[/bold red] (Score: {result.risk_score.score})"
+            )
+        )
         if result.ai_summary:
             console.print("\n[bold]AI Summary:[/bold]")
             console.print(result.ai_summary)
-            
-        if ci:
-            severity_map = {"low": 1, "medium": 21, "high": 51, "critical": 100}
-            threshold = severity_map.get(fail_on.lower(), 100)
-            if result.risk_score.score >= threshold:
-                console.print(f"[bold red]CI Check Failed: Score {result.risk_score.score} >= {threshold}[/bold red]")
-                raise typer.Exit(code=1)
+
+    if ci:
+        severity_map = {"low": 1, "medium": 21, "high": 51, "critical": 100}
+        threshold = severity_map.get(effective_fail_on.lower(), 100)
+        if result.risk_score.score >= threshold:
+            console.print(
+                f"[bold red]CI Check Failed: Score {result.risk_score.score} >= threshold {threshold} ({effective_fail_on.upper()})[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+
+@app.command()
+def init(
+    path: str = typer.Option(".", help="Directory where .maunprekshak.toml will be created")
+):
+    """Initialize a default .maunprekshak.toml configuration file."""
+    target = Path(path) / ".maunprekshak.toml"
+    if target.exists():
+        console.print(f"[yellow].maunprekshak.toml already exists at {target}[/yellow]")
+        return
+    with open(target, "w") as f:
+        f.write(DEFAULT_CONFIG_TEMPLATE)
+    console.print(f"[bold green]✓ Created configuration file at {target}[/bold green]")
+
 
 @app.command()
 def version():
     """Print the current version."""
     console.print(f"MaunPrekshak v{__version__}")
+
 
 @app.command()
 def auth_login():
@@ -79,6 +135,7 @@ def auth_login():
     with open(os.path.expanduser("~/.maunprekshak.yaml"), "w") as f:
         f.write(f"api_key: {key}")
     console.print("[green]API Key saved.[/green]")
+
 
 if __name__ == "__main__":
     app()
