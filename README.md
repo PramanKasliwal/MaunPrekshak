@@ -14,7 +14,7 @@
 
 ## ⚡ Highlights
 
-- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) with lockfile parsing (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`) for deep transitive dependency tracking.
+- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) with lockfile parsing (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
 - 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
 - 🛡️ **Static Code Analysis (SAST)**: 18 AST security rules (MP001–MP018) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, and unsafe deserialization.
 - ⚡ **Git Staged & Diff Scanning**: Fast pre-commit mode via `--staged` and `--diff` checking only modified files in milliseconds.
@@ -80,6 +80,8 @@ mp scan . --ci --fail-on critical
 
 # Fail CI build on HIGH or CRITICAL issues
 mp scan . --ci --fail-on high
+
+# A single HIGH or CRITICAL finding is enough to fail; the risk score remains informational
 ```
 
 ---
@@ -103,7 +105,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.3.0
+        uses: PramanKasliwal/maunprekshak@v0.3.1
         with:
           fail-on: high
           output: sarif
@@ -125,7 +127,7 @@ Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to y
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.3.0
+    rev: v0.3.1
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high"]
@@ -192,7 +194,7 @@ Top Findings:
 | `--output` | `console` | Output format: `console`, `json`, `markdown`, `pdf`, `sarif` |
 | `--output-file` | `stdout` | Write report directly to a file |
 | `--ci` | `false` | Compact machine-readable summary + exit code |
-| `--fail-on` | `critical` | Threshold: `critical`, `high`, `medium`, `low` |
+| `--fail-on` | `critical` | Fail when any finding reaches `critical`, `high`, `medium`, or `low` |
 | `--no-ai` | `false` | Skip AI summary generation (instant execution) |
 | `--exclude` | `None` | Comma-separated directories to exclude |
 | `--staged` | `false` | Scan only git staged files (instant pre-commit mode) |

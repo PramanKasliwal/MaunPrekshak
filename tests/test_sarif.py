@@ -63,11 +63,13 @@ def test_sast_finding_sarif_mapping():
 
 def test_secret_finding_sarif_mapping():
     """Test mapping of secret findings to SARIF rules and results."""
+    import secrets
+    masked_value = "AKIA***" + secrets.token_hex(2)
     sec = SecretFinding(
         file_path="/tmp/myproject/config.py",
         line=15,
         secret_type="AWS Access Key ID",
-        masked_value="AKIAIOSFODNN7EXAMPLE",
+        masked_value=masked_value,
         severity="CRITICAL",
     )
     res = ScanResult(secrets=[sec], risk_score=RiskScore(score=10, level="LOW"))
@@ -78,7 +80,7 @@ def test_secret_finding_sarif_mapping():
     assert len(run["results"]) == 1
     result = run["results"][0]
     assert result["level"] == "error"
-    assert "AKIAIOSFODNN7EXAMPLE" in result["message"]["text"]
+    assert masked_value in result["message"]["text"]
     loc = result["locations"][0]["physicalLocation"]
     assert loc["artifactLocation"]["uri"] == "config.py"
     assert loc["region"]["startLine"] == 15

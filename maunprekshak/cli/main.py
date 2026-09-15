@@ -156,11 +156,15 @@ def scan(
             console.print(result.ai_summary)
 
     if ci:
-        severity_map = {"low": 1, "medium": 21, "high": 51, "critical": 100}
-        threshold = severity_map.get(effective_fail_on.lower(), 100)
-        if result.risk_score.score >= threshold:
+        severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+        threshold = severity_map.get(effective_fail_on.lower(), 4)
+        breached = sum(
+            severity_map.get(finding.severity.lower(), 0) >= threshold
+            for finding in result.deps + result.secrets + result.sast
+        )
+        if breached:
             console.print(
-                f"[bold red]CI Check Failed: Score {result.risk_score.score} >= threshold {threshold} ({effective_fail_on.upper()})[/bold red]"
+                f"[bold red]CI Check Failed: {breached} finding(s) at or above {effective_fail_on.upper()}[/bold red]"
             )
             raise typer.Exit(code=1)
 
