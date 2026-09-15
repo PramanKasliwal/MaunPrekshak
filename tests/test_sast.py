@@ -101,3 +101,78 @@ class TestFindings:
         path = write_py(tmp_path, "vuln.py", 'result = eval(user_input)\n')
         findings = scan_sast(path)
         assert len(findings[0].recommendation) > 0
+
+
+class TestExtendedSASTRules:
+    def test_detects_sql_injection_binop(self, tmp_path):
+        path = write_py(tmp_path, "db.py", 'cursor.execute("SELECT * FROM users WHERE id = %s" % user_id)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP006" in check_ids
+
+    def test_detects_sql_injection_fstring(self, tmp_path):
+        path = write_py(tmp_path, "db.py", 'cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP006" in check_ids
+
+    def test_detects_sql_injection_format(self, tmp_path):
+        path = write_py(tmp_path, "db.py", 'cursor.execute("SELECT * FROM users WHERE id = {}".format(user_id))\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP006" in check_ids
+
+    def test_no_flag_on_parameterized_query(self, tmp_path):
+        path = write_py(tmp_path, "db.py", 'cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))\n')
+        findings = scan_sast(path)
+        mp006 = [f for f in findings if f.check_id == "MP006"]
+        assert len(mp006) == 0
+
+    def test_detects_disabled_ssl_verification(self, tmp_path):
+        path = write_py(tmp_path, "api.py", 'import requests\nresp = requests.get("https://example.com", verify=False)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP015" in check_ids
+
+    def test_detects_ssl_unverified_context(self, tmp_path):
+        path = write_py(tmp_path, "api.py", 'import ssl\nctx = ssl._create_unverified_context()\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP015" in check_ids
+
+    def test_detects_wildcard_binding(self, tmp_path):
+        path = write_py(tmp_path, "server.py", 'app.run(host="0.0.0.0", port=8000)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP016" in check_ids
+
+    def test_detects_insecure_tmp_file(self, tmp_path):
+        path = write_py(tmp_path, "util.py", 'with open("/tmp/output.dat", "w") as f:\n    f.write("test")\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP017" in check_ids
+
+    def test_detects_unsafe_shelve(self, tmp_path):
+        path = write_py(tmp_path, "store.py", 'import shelve\ns = shelve.open("mydb")\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP018" in check_ids
+
+    def test_detects_unsafe_jsonpickle(self, tmp_path):
+        path = write_py(tmp_path, "store.py", 'import jsonpickle\nobj = jsonpickle.decode(payload)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP018" in check_ids
+
+    def test_target_files_filters_sast_scan(self, tmp_path):
+        vuln = tmp_path / "vuln.py"
+        vuln.write_text('eval("1+1")\n')
+        safe = tmp_path / "safe.py"
+        safe.write_text('x = 1\n')
+
+        findings = scan_sast(str(tmp_path), target_files=[str(safe)])
+        assert len(findings) == 0
+
+        findings_vuln = scan_sast(str(tmp_path), target_files=[str(vuln)])
+        assert len(findings_vuln) > 0
+

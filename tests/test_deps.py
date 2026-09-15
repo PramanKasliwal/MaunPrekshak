@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from maunprekshak.scanner.deps import (
     parse_requirements_file,
     parse_pyproject_toml,
+    parse_poetry_lock,
+    parse_pipfile_lock,
+    parse_uv_lock,
     scan_dependencies,
 )
 
@@ -145,3 +148,73 @@ class TestScanDependencies:
 
         # Should not raise — returns empty list on network failure
         assert isinstance(vulns, list)
+
+    @pytest.mark.asyncio
+    async def test_target_files_filters_dependency_scan(self, tmp_path):
+        req_file = tmp_path / "requirements.txt"
+        req_file.write_text("requests==2.25.1\n")
+
+        # When target_files does not include requirements.txt, scan is skipped
+        vulns = await scan_dependencies(str(tmp_path), target_files=["other_file.py"])
+        assert vulns == []
+
+
+SAMPLE_POETRY_LOCK = """\
+[[package]]
+name = "cryptography"
+version = "41.0.1"
+description = "cryptography is a package"
+
+[[package]]
+name = "urllib3"
+version = "1.26.15"
+description = "HTTP library with thread-safe connection pooling"
+"""
+
+SAMPLE_PIPFILE_LOCK = """\
+{
+    "_meta": {"hash": {"sha256": "abcdef"}},
+    "default": {
+        "flask": {"version": "==2.2.5"}
+    },
+    "develop": {
+        "pytest": {"version": "==7.4.0"}
+    }
+}
+"""
+
+SAMPLE_UV_LOCK = """\
+version = 1
+
+[[package]]
+name = "httpx"
+version = "0.27.0"
+
+[[package]]
+name = "certifi"
+version = "2024.2.2"
+"""
+
+
+class TestLockfileParsers:
+    def test_parse_poetry_lock(self, tmp_path):
+        lock = tmp_path / "poetry.lock"
+        lock.write_text(SAMPLE_POETRY_LOCK)
+        packages = parse_poetry_lock(str(lock))
+        assert ("cryptography", "41.0.1") in packages
+        assert ("urllib3", "1.26.15") in packages
+
+    def test_parse_pipfile_lock(self, tmp_path):
+        lock = tmp_path / "Pipfile.lock"
+        lock.write_text(SAMPLE_PIPFILE_LOCK)
+        packages = parse_pipfile_lock(str(lock))
+        assert ("flask", "2.2.5") in packages
+        assert ("pytest", "7.4.0") in packages
+
+    def test_parse_uv_lock(self, tmp_path):
+        lock = tmp_path / "uv.lock"
+        lock.write_text(SAMPLE_UV_LOCK)
+        packages = parse_uv_lock(str(lock))
+        assert ("httpx", "0.27.0") in packages
+        assert ("certifi", "2024.2.2") in packages
+

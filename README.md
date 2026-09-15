@@ -14,12 +14,13 @@
 
 ## ⚡ Highlights
 
-- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) for `requirements.txt`, `pyproject.toml`, and `Pipfile`.
-- 🔑 **Secrets & Credential Detection**: 40+ high-precision regex detectors for AWS keys, GCP keys, GitHub tokens, Stripe keys, RSA/SSH private keys, JWTs, and database URIs with false-positive suppression.
-- 🛡️ **Static Code Analysis (SAST)**: Python AST visitor checking for `eval()`, `exec()`, `pickle.loads()`, `subprocess(..., shell=True)`, `yaml.load()`, insecure hashing (`MD5`/`SHA1`), and command injection.
-- 🎨 **Rich Terminal UX**: Beautiful formatted console output, severity badges, and export to **JSON** or **Markdown**.
-- 🔒 **100% Privacy & Local-First**: Scans run entirely on your local CPU. Your source code never leaves your computer.
-- 🤖 **Optional AI Remediation**: Plug in your own Google Gemini API key to get an instant executive summary and tailored remediation steps.
+- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) with lockfile parsing (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`) for deep transitive dependency tracking.
+- 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
+- 🛡️ **Static Code Analysis (SAST)**: 18 AST security rules (MP001–MP018) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, and unsafe deserialization.
+- ⚡ **Git Staged & Diff Scanning**: Fast pre-commit mode via `--staged` and `--diff` checking only modified files in milliseconds.
+- 🎨 **Rich Terminal & SARIF Export**: Formatted console output with risk gauges, and standard OASIS SARIF 2.1.0, JSON, or Markdown export.
+- 🔒 **100% Privacy & Local-First**: Scans run entirely on your local CPU. Your source code never leaves your machine.
+- 🤖 **Optional AI Remediation**: Plug in your Google Gemini API key for instant root-cause analysis and remediation steps.
 
 ---
 
@@ -102,7 +103,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.2.0
+        uses: PramanKasliwal/maunprekshak@v0.3.0
         with:
           fail-on: high
           output: sarif
@@ -124,10 +125,10 @@ Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to y
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.2.0
+    rev: v0.3.0
     hooks:
       - id: maunprekshak
-        args: ["--fail-on", "high"]
+        args: ["--staged", "--fail-on", "high"]
 ```
 
 ---
@@ -188,12 +189,14 @@ Top Findings:
 | :--- | :---: | :--- |
 | `path` | `.` | Directory or project path to scan |
 | `--only` | `all` | Restrict scan to: `deps`, `secrets`, or `sast` |
-| `--output` | `console` | Output format: `console`, `json`, `markdown` |
+| `--output` | `console` | Output format: `console`, `json`, `markdown`, `pdf`, `sarif` |
 | `--output-file` | `stdout` | Write report directly to a file |
 | `--ci` | `false` | Compact machine-readable summary + exit code |
 | `--fail-on` | `critical` | Threshold: `critical`, `high`, `medium`, `low` |
 | `--no-ai` | `false` | Skip AI summary generation (instant execution) |
 | `--exclude` | `None` | Comma-separated directories to exclude |
+| `--staged` | `false` | Scan only git staged files (instant pre-commit mode) |
+| `--diff` | `None` | Scan only files modified against a git ref (e.g. `HEAD~1`, `main`) |
 
 ---
 

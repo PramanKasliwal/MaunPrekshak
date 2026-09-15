@@ -83,3 +83,59 @@ class TestSecretPatterns:
         findings = scan_secrets(str(tmp_path))
         # Reading from env vars is safe — should not flag
         assert len(findings) == 0
+
+
+class TestShannonEntropy:
+    """Test Shannon entropy calculation and candidate secret detection."""
+
+    def test_detects_high_entropy_hex_token(self, tmp_path):
+        py_file = tmp_path / "crypto.py"
+        py_file.write_text('auth_hash = "4f9b2d8e1a3c7b5f9e2d4a6c8e0b1f3a"\n')
+        findings = scan_secrets(str(tmp_path))
+        entropy_findings = [f for f in findings if "High-Entropy" in f.secret_type]
+        assert len(entropy_findings) > 0
+
+    def test_detects_high_entropy_base64_token(self, tmp_path):
+        py_file = tmp_path / "auth.py"
+        # High-entropy un-prefixed base64 string
+        py_file.write_text('payload = "dGhpcy1pcy1hLXZlcnktcmFuZG9tLXNlY3JldC1rZXktMTIzNDU2Nzg5"\n')
+        findings = scan_secrets(str(tmp_path))
+        entropy_findings = [f for f in findings if "High-Entropy" in f.secret_type]
+        assert len(entropy_findings) > 0
+
+    def test_suppresses_uuid(self, tmp_path):
+        py_file = tmp_path / "models.py"
+        py_file.write_text('session_id = "550e8400-e29b-41d4-a716-446655440000"\n')
+        findings = scan_secrets(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_suppresses_urls_and_file_paths(self, tmp_path):
+        py_file = tmp_path / "client.py"
+        py_file.write_text(
+            'url = "https://api.example.com/v1/auth/oauth2/token"\n'
+            'path = "/usr/local/share/data/templates/index.html"\n'
+        )
+        findings = scan_secrets(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_suppresses_placeholder_and_dummy_tokens(self, tmp_path):
+        py_file = tmp_path / "config.py"
+        py_file.write_text('sample_token = "dummy_placeholder_token_for_testing_purposes"\n')
+        findings = scan_secrets(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_target_files_only_scans_specified_files(self, tmp_path):
+        vuln_file = tmp_path / "vuln.py"
+        vuln_file.write_text('AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"\n')
+
+        safe_file = tmp_path / "safe.py"
+        safe_file.write_text('x = 42\n')
+
+        # When target_files points only to safe_file, vuln_file must be ignored
+        findings = scan_secrets(str(tmp_path), target_files=[str(safe_file)])
+        assert len(findings) == 0
+
+        # When target_files points to vuln_file, it is scanned
+        findings_vuln = scan_secrets(str(tmp_path), target_files=[str(vuln_file)])
+        assert len(findings_vuln) > 0
+

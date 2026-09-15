@@ -3,10 +3,11 @@ MaunPrekshak — Dependency Vulnerability Scanner
 Parses Python dependency files and queries OSV.dev for known CVEs.
 """
 import asyncio
+import json
 import os
 import re
 import tomllib
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import httpx
 
@@ -98,6 +99,64 @@ def parse_pipfile(file_path: str) -> List[tuple[str, str]]:
                 packages.append((pkg.lower(), version))
             else:
                 packages.append((pkg.lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_poetry_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse poetry.lock and extract pinned packages from [[package]].
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+        for pkg in data.get("package", []):
+            name = pkg.get("name")
+            version = pkg.get("version")
+            if name and version:
+                packages.append((str(name).lower(), str(version).strip()))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_pipfile_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse Pipfile.lock and extract packages from default and develop sections.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for section in ("default", "develop"):
+            for pkg, info in data.get(section, {}).items():
+                if isinstance(info, dict):
+                    version_str = info.get("version", "")
+                    clean_ver = re.sub(r"^[=><~!]+", "", version_str).strip()
+                    if clean_ver:
+                        packages.append((pkg.lower(), clean_ver))
+                    else:
+                        packages.append((pkg.lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_uv_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse uv.lock and extract pinned packages from [[package]].
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+        for pkg in data.get("package", []):
+            name = pkg.get("name")
+            version = pkg.get("version")
+            if name and version:
+                packages.append((str(name).lower(), str(version).strip()))
     except Exception:
         pass
     return packages
@@ -199,37 +258,49 @@ async def _query_osv(package: str, version: str) -> List[DepVulnerability]:
 
 # ─── Main Scanner ─────────────────────────────────────────────────────────────
 
-async def scan_dependencies(path: str) -> List[DepVulnerability]:
+async def scan_dependencies(
+    path: str,
+    target_files: Optional[List[str]] = None,
+) -> List[DepVulnerability]:
     """
     Scan all dependency files in a project directory for known CVEs.
 
-    Looks for: requirements.txt, pyproject.toml, Pipfile
+    Looks for: poetry.lock, Pipfile.lock, uv.lock, requirements.txt, pyproject.toml, Pipfile
 
     Args:
         path: Absolute path to the project root directory.
+        target_files: Optional list of specific files to check (e.g. for git diff / staged mode).
 
     Returns:
         List of DepVulnerability findings, possibly empty.
     """
     all_packages: Dict[str, str] = {}
 
-    # requirements.txt
-    req_path = os.path.join(path, "requirements.txt")
-    if os.path.exists(req_path):
-        for pkg, ver in parse_requirements_file(req_path):
-            all_packages[pkg] = ver
+    parsers = [
+        ("poetry.lock", parse_poetry_lock),
+        ("Pipfile.lock", parse_pipfile_lock),
+        ("uv.lock", parse_uv_lock),
+        ("requirements.txt", parse_requirements_file),
+        ("pyproject.toml", parse_pyproject_toml),
+        ("Pipfile", parse_pipfile),
+    ]
 
-    # pyproject.toml
-    pyproject_path = os.path.join(path, "pyproject.toml")
-    if os.path.exists(pyproject_path):
-        for pkg, ver in parse_pyproject_toml(pyproject_path):
-            all_packages.setdefault(pkg, ver)
+    for filename, parser in parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            # Only scan if this dependency file is among the target files
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
 
-    # Pipfile
-    pipfile_path = os.path.join(path, "Pipfile")
-    if os.path.exists(pipfile_path):
-        for pkg, ver in parse_pipfile(pipfile_path):
-            all_packages.setdefault(pkg, ver)
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                # Prefer pinned version over empty/unpinned
+                if pkg not in all_packages or (ver and not all_packages[pkg]):
+                    all_packages[pkg] = ver
 
     if not all_packages:
         return []

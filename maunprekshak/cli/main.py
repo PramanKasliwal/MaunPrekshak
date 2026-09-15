@@ -1,7 +1,8 @@
 import typer
 import os
+import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
@@ -26,6 +27,41 @@ app = typer.Typer(help="MaunPrekshak — The Silent Observer")
 console = Console()
 
 
+def get_git_staged_files(repo_path: str) -> List[str]:
+    """Get list of files staged in git index."""
+    try:
+        res = subprocess.run(
+            ["git", "diff", "--name-only", "--cached"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        files = [f.strip() for f in res.stdout.splitlines() if f.strip()]
+        return [os.path.abspath(os.path.join(repo_path, f)) for f in files]
+    except Exception:
+        return []
+
+
+def get_git_diff_files(repo_path: str, ref: Optional[str] = None) -> List[str]:
+    """Get list of modified files in working tree or against a ref."""
+    try:
+        cmd = ["git", "diff", "--name-only"]
+        if ref:
+            cmd.append(ref)
+        res = subprocess.run(
+            cmd,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        files = [f.strip() for f in res.stdout.splitlines() if f.strip()]
+        return [os.path.abspath(os.path.join(repo_path, f)) for f in files]
+    except Exception:
+        return []
+
+
 @app.command()
 def scan(
     path: str = typer.Argument(".", help="Path to project or directory to scan"),
@@ -36,6 +72,8 @@ def scan(
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
     no_ai: bool = typer.Option(False, help="Skip Gemini AI summary generation"),
     exclude: Optional[str] = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
+    staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
+    diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -49,8 +87,27 @@ def scan(
     effective_fail_on = fail_on if fail_on is not None else cfg.fail_on
     effective_no_ai = no_ai or cfg.no_ai
 
+    target_files: Optional[List[str]] = None
+    if staged:
+        target_files = get_git_staged_files(path)
+        if not target_files:
+            if output == "console":
+                console.print("[yellow]No staged files found in git repository. Nothing to scan.[/yellow]")
+            return
+        if output == "console":
+            console.print(f"[bold cyan]Targeting {len(target_files)} staged file(s)...[/bold cyan]")
+    elif diff is not None:
+        ref = diff if diff.strip() else None
+        target_files = get_git_diff_files(path, ref)
+        if not target_files:
+            if output == "console":
+                console.print("[yellow]No modified files found in git diff. Nothing to scan.[/yellow]")
+            return
+        if output == "console":
+            console.print(f"[bold cyan]Targeting {len(target_files)} modified file(s)...[/bold cyan]")
+
     with console.status("[bold green]Scanning project...") as status:
-        result = scan_project(path, exclude=exclude_list, only=only)
+        result = scan_project(path, exclude=exclude_list, only=only, target_files=target_files)
 
         # Apply rule exclusions from config if specified
         if cfg.ignore_rules:

@@ -15,7 +15,7 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP003  pickle/marshal deserialization CRITICAL
 # MP004  subprocess with shell=True    HIGH
 # MP005  os.system() usage             HIGH
-# MP006  SQL string concatenation      HIGH
+# MP006  SQL string concatenation      CRITICAL
 # MP007  compile() with user data      HIGH
 # MP008  Weak hash (MD5/SHA1)          MEDIUM
 # MP009  insecure random               MEDIUM
@@ -24,6 +24,10 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP012  yaml.load() without Loader    HIGH
 # MP013  xml.etree (use defusedxml)    MEDIUM
 # MP014  tempfile.mktemp() race cond   MEDIUM
+# MP015  Disabled SSL verification     HIGH
+# MP016  Wildcard network binding      MEDIUM
+# MP017  Hardcoded /tmp file usage     MEDIUM
+# MP018  Unsafe shelve/jsonpickle      HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -100,7 +104,7 @@ class SecurityVisitor(ast.NodeVisitor):
                       "Never deserialize data from untrusted sources with pickle.")
 
         # MP004 — subprocess shell=True
-        elif obj == "subprocess" or func_name in ("run", "call", "check_call", "check_output", "Popen"):
+        elif obj == "subprocess" or (obj == "" and func_name in ("run", "call", "check_call", "check_output", "Popen")):
             if self._has_keyword(node, "shell", True):
                 self._add(node, "MP004", Severity.HIGH.value,
                           "subprocess called with shell=True — command injection risk",
@@ -154,6 +158,54 @@ class SecurityVisitor(ast.NodeVisitor):
                       "tempfile.mktemp() has a race condition — insecure temp file creation",
                       "Use tempfile.mkstemp() or tempfile.NamedTemporaryFile() instead.")
 
+        # MP006 — SQL string concatenation / formatting
+        elif method in ("execute", "executemany", "raw") or func_name in ("execute", "executemany", "raw"):
+            if node.args:
+                arg0 = node.args[0]
+                is_formatted = (
+                    isinstance(arg0, (ast.JoinedStr, ast.BinOp))
+                    or (
+                        isinstance(arg0, ast.Call)
+                        and isinstance(arg0.func, ast.Attribute)
+                        and arg0.func.attr == "format"
+                    )
+                )
+                if is_formatted:
+                    self._add(node, "MP006", Severity.CRITICAL.value,
+                              "SQL query constructed via string formatting/concatenation — SQL injection risk",
+                              "Use parameterized queries with placeholders: "
+                              "cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,)).")
+
+        # MP015 — Insecure SSL/TLS verification disabled
+        elif self._has_keyword(node, "verify", False) or (obj == "ssl" and method == "_create_unverified_context"):
+            self._add(node, "MP015", Severity.HIGH.value,
+                      "Insecure SSL/TLS verification disabled — Man-in-the-Middle (MitM) attack risk",
+                      "Never disable SSL verification (verify=False) in production. Ensure proper CA certificates are configured.")
+
+        # MP016 — Wildcard network binding (0.0.0.0)
+        elif self._has_keyword(node, "host", "0.0.0.0") or self._has_keyword(node, "bind", "0.0.0.0") or (
+            method == "bind" and node.args and isinstance(node.args[0], (ast.Tuple, ast.List))
+            and node.args[0].elts and isinstance(node.args[0].elts[0], ast.Constant)
+            and node.args[0].elts[0].value == "0.0.0.0"
+        ):
+            self._add(node, "MP016", Severity.MEDIUM.value,
+                      "Binding to wildcard address '0.0.0.0' exposes service on all network interfaces",
+                      "Bind to 127.0.0.1 for local development, or configure a specific host interface/reverse proxy for production.")
+
+        # MP017 — Insecure hardcoded temporary file usage
+        elif ((obj == "" and func_name == "open") or (obj == "os" and method in ("open", "remove", "unlink"))) and node.args:
+            if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if node.args[0].value.startswith(("/tmp/", "/var/tmp/")):
+                    self._add(node, "MP017", Severity.MEDIUM.value,
+                              "Hardcoded /tmp file path in open() — race condition and symlink vulnerability risk",
+                              "Use tempfile.NamedTemporaryFile() or tempfile.TemporaryDirectory() for secure temporary files.")
+
+        # MP018 — Unsafe deserialization via shelve or jsonpickle
+        elif (obj == "shelve" and method == "open") or (obj == "jsonpickle" and method in ("decode", "unpickler")):
+            self._add(node, "MP018", Severity.HIGH.value,
+                      f"Unsafe deserialization with {obj}.{method}() — arbitrary code execution risk",
+                      f"Avoid {obj}.{method}() on untrusted data. Use safe serialization formats like JSON.")
+
         self.generic_visit(node)
 
     def visit_Assert(self, node: ast.Assert) -> None:
@@ -195,13 +247,37 @@ EXCLUDE_DIRS = {
 }
 
 
-def scan_sast(path: str, exclude: Optional[List[str]] = None) -> List[SASTFinding]:
+def _scan_single_py_file(file_path: str) -> List[SASTFinding]:
+    """Scan a single Python source file for AST security issues."""
+    findings: List[SASTFinding] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
+
+        source_lines = source.splitlines()
+        tree = ast.parse(source, filename=file_path)
+        visitor = SecurityVisitor(file_path, source_lines)
+        visitor.visit(tree)
+        findings.extend(visitor.findings)
+    except SyntaxError:
+        pass  # Skip files with syntax errors
+    except Exception:
+        pass
+    return findings
+
+
+def scan_sast(
+    path: str,
+    exclude: Optional[List[str]] = None,
+    target_files: Optional[List[str]] = None,
+) -> List[SASTFinding]:
     """
-    Scan all Python files in the project directory for security issues.
+    Scan Python files in the project directory for security issues.
 
     Args:
         path: Absolute path to the project root directory.
         exclude: Optional list of additional directories to exclude.
+        target_files: Optional list of specific files to check (e.g. for git diff / staged mode).
 
     Returns:
         List of SASTFinding objects, sorted by severity then file/line.
@@ -211,29 +287,23 @@ def scan_sast(path: str, exclude: Optional[List[str]] = None) -> List[SASTFindin
     if exclude:
         active_excludes.update(exclude)
 
-    for root, dirs, files in os.walk(path):
-        # Skip excluded directories in-place
-        dirs[:] = [d for d in dirs if d not in active_excludes]
-
-        for filename in files:
-            if not filename.endswith(".py"):
+    if target_files is not None:
+        for f in target_files:
+            abs_path = f if os.path.isabs(f) else os.path.join(path, f)
+            if not os.path.isfile(abs_path) or not abs_path.endswith(".py"):
                 continue
-
-            file_path = os.path.join(root, filename)
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                    source = f.read()
-
-                source_lines = source.splitlines()
-                tree = ast.parse(source, filename=file_path)
-                visitor = SecurityVisitor(file_path, source_lines)
-                visitor.visit(tree)
-                findings.extend(visitor.findings)
-
-            except SyntaxError:
-                pass  # Skip files with syntax errors
-            except Exception:
-                pass
+            path_parts = set(abs_path.replace("\\", "/").split("/"))
+            if path_parts & active_excludes:
+                continue
+            findings.extend(_scan_single_py_file(abs_path))
+    else:
+        for root, dirs, files in os.walk(path):
+            dirs[:] = [d for d in dirs if d not in active_excludes]
+            for filename in files:
+                if not filename.endswith(".py"):
+                    continue
+                file_path = os.path.join(root, filename)
+                findings.extend(_scan_single_py_file(file_path))
 
     # Sort: CRITICAL first, then by file + line
     severity_order = {

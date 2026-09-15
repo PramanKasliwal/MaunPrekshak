@@ -1,7 +1,7 @@
 - id: maunprekshak
   name: MaunPrekshak Security Scanner
-  description: The Silent Observer — Full project scanner for dependencies, secrets, and AST code vulnerabilities
-  entry: mp scan . --ci --fail-on high --no-ai
+  description: The Silent Observer — Fast staged scanner for dependencies, secrets, and AST code vulnerabilities
+  entry: mp scan . --staged --ci --fail-on high --no-ai
   language: python
   types: [python]
   pass_filenames: false
@@ -9,6 +9,6 @@
 - id: maunprekshak-secrets
   name: MaunPrekshak Secrets Detector
   description: Fast credential leak detector for API keys, tokens, and credentials
-  entry: mp scan . --only secrets --ci --fail-on high --no-ai
+  entry: mp scan . --staged --only secrets --ci --fail-on high --no-ai
   language: python
   pass_filenames: false
