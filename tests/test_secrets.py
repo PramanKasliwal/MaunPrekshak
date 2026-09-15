@@ -1,6 +1,8 @@
 """
 Tests for MaunPrekshak Secrets Scanner
 """
+import uuid
+import secrets as py_secrets
 import pytest
 from maunprekshak.scanner.secrets import scan_secrets, SECRET_PATTERNS
 
@@ -90,22 +92,27 @@ class TestShannonEntropy:
 
     def test_detects_high_entropy_hex_token(self, tmp_path):
         py_file = tmp_path / "crypto.py"
-        py_file.write_text('auth_hash = "4f9b2d8e1a3c7b5f9e2d4a6c8e0b1f3a"\n')
+        # Dynamically generate random 32-char hex token at runtime (no hardcoded credentials)
+        dummy_hex = py_secrets.token_hex(16)
+        py_file.write_text(f'auth_hash = "{dummy_hex}"\n')
         findings = scan_secrets(str(tmp_path))
         entropy_findings = [f for f in findings if "High-Entropy" in f.secret_type]
         assert len(entropy_findings) > 0
 
     def test_detects_high_entropy_base64_token(self, tmp_path):
         py_file = tmp_path / "auth.py"
-        # High-entropy un-prefixed base64 string
-        py_file.write_text('payload = "dGhpcy1pcy1hLXZlcnktcmFuZG9tLXNlY3JldC1rZXktMTIzNDU2Nzg5"\n')
+        # Dynamically generate random base64 token at runtime
+        dummy_b64 = py_secrets.token_urlsafe(32)
+        py_file.write_text(f'payload = "{dummy_b64}"\n')
         findings = scan_secrets(str(tmp_path))
         entropy_findings = [f for f in findings if "High-Entropy" in f.secret_type]
         assert len(entropy_findings) > 0
 
     def test_suppresses_uuid(self, tmp_path):
         py_file = tmp_path / "models.py"
-        py_file.write_text('session_id = "550e8400-e29b-41d4-a716-446655440000"\n')
+        # Dynamically generate random UUID
+        dummy_uuid = str(uuid.uuid4())
+        py_file.write_text(f'session_id = "{dummy_uuid}"\n')
         findings = scan_secrets(str(tmp_path))
         assert len(findings) == 0
 
