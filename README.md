@@ -14,9 +14,9 @@
 
 ## ⚡ Highlights
 
-- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) with lockfile parsing (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
+- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) across Python (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`) and JavaScript/Node.js (`package-lock.json`, `package.json`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
 - 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
-- 🛡️ **Static Code Analysis (SAST)**: 18 AST security rules (MP001–MP018) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, and unsafe deserialization.
+- 🛡️ **Static Code Analysis (SAST)**: 22 AST security rules (MP001–MP022) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, unsafe deserialization, paramiko AutoAddPolicy SSH MitM, unverified JWT decoding, world-writable chmod permissions, and legacy XML XXE parsers.
 - ⚡ **Git Staged & Diff Scanning**: Fast pre-commit mode via `--staged` and `--diff` checking only modified files in milliseconds.
 - 🎨 **Rich Terminal & SARIF Export**: Formatted console output with risk gauges, and standard OASIS SARIF 2.1.0, JSON, or Markdown export.
 - 🔒 **100% Privacy & Local-First**: Scans run entirely on your local CPU. Your source code never leaves your machine.
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.3.1
+        uses: PramanKasliwal/maunprekshak@v0.4.0
         with:
           fail-on: high
           output: sarif
@@ -127,7 +127,7 @@ Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to y
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.3.1
+    rev: v0.4.0
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high"]

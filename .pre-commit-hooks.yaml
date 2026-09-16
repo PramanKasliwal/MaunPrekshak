@@ -3,7 +3,7 @@
   description: The Silent Observer — Fast staged scanner for dependencies, secrets, and AST code vulnerabilities; fails on any high or critical finding
   entry: mp scan . --staged --ci --fail-on high --no-ai
   language: python
-  types: [python]
+  types_or: [python, json, toml]
   pass_filenames: false
 
 - id: maunprekshak-secrets

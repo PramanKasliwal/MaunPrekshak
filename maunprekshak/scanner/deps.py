@@ -162,6 +162,56 @@ def parse_uv_lock(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_package_json(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a package.json file and extract dependencies and devDependencies.
+    Normalizes semver ranges (^, ~, >=, <=) to baseline version strings.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for section in ("dependencies", "devDependencies"):
+            for pkg, ver_spec in data.get(section, {}).items():
+                if isinstance(ver_spec, str):
+                    clean_ver = re.sub(r"^[=><~^v\s]+", "", ver_spec).strip()
+                    if clean_ver and re.match(r"^\d", clean_ver):
+                        packages.append((pkg.lower(), clean_ver))
+                    else:
+                        packages.append((pkg.lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_package_lock_json(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse package-lock.json (supporting v1, v2, and v3 schemas) and extract pinned packages.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "packages" in data and isinstance(data["packages"], dict):
+            for key, info in data["packages"].items():
+                if not key or not isinstance(info, dict):
+                    continue
+                if "node_modules/" in key:
+                    pkg_name = key.split("node_modules/")[-1].strip()
+                    version = str(info.get("version", "")).strip()
+                    if pkg_name and version:
+                        packages.append((pkg_name.lower(), version))
+        elif "dependencies" in data and isinstance(data["dependencies"], dict):
+            for pkg_name, info in data["dependencies"].items():
+                if isinstance(info, dict):
+                    version = str(info.get("version", "")).strip()
+                    if pkg_name and version:
+                        packages.append((pkg_name.lower(), version))
+    except Exception:
+        pass
+    return packages
+
+
 # ─── OSV.dev API ──────────────────────────────────────────────────────────────
 
 def _cvss_to_severity(cvss_score: float) -> str:
@@ -202,7 +252,7 @@ def _extract_fix_version(vuln: dict) -> str:
     return "No fix available"
 
 
-async def _query_osv(package: str, version: str) -> List[DepVulnerability]:
+async def _query_osv(package: str, version: str, ecosystem: str = "PyPI") -> List[DepVulnerability]:
     """
     Query the OSV.dev API for a single package+version combination.
     Returns a list of DepVulnerability objects.
@@ -214,7 +264,7 @@ async def _query_osv(package: str, version: str) -> List[DepVulnerability]:
     url = "https://api.osv.dev/v1/query"
     payload = {
         "version": version,
-        "package": {"name": package, "ecosystem": "PyPI"},
+        "package": {"name": package, "ecosystem": ecosystem},
     }
     timeout = httpx.Timeout(10.0)
 
@@ -265,7 +315,8 @@ async def scan_dependencies(
     """
     Scan all dependency files in a project directory for known CVEs.
 
-    Looks for: poetry.lock, Pipfile.lock, uv.lock, requirements.txt, pyproject.toml, Pipfile
+    Looks for Python manifests: poetry.lock, Pipfile.lock, uv.lock, requirements.txt, pyproject.toml, Pipfile
+    Looks for JavaScript/npm manifests: package-lock.json, package.json
 
     Args:
         path: Absolute path to the project root directory.
@@ -274,9 +325,10 @@ async def scan_dependencies(
     Returns:
         List of DepVulnerability findings, possibly empty.
     """
-    all_packages: Dict[str, str] = {}
+    python_packages: Dict[str, str] = {}
+    npm_packages: Dict[str, str] = {}
 
-    parsers = [
+    python_parsers = [
         ("poetry.lock", parse_poetry_lock),
         ("Pipfile.lock", parse_pipfile_lock),
         ("uv.lock", parse_uv_lock),
@@ -284,8 +336,12 @@ async def scan_dependencies(
         ("pyproject.toml", parse_pyproject_toml),
         ("Pipfile", parse_pipfile),
     ]
+    npm_parsers = [
+        ("package-lock.json", parse_package_lock_json),
+        ("package.json", parse_package_json),
+    ]
 
-    for filename, parser in parsers:
+    for filename, parser in python_parsers:
         file_path = os.path.join(path, filename)
         if target_files is not None:
             # Only scan if this dependency file is among the target files
@@ -299,14 +355,32 @@ async def scan_dependencies(
         if os.path.exists(file_path):
             for pkg, ver in parser(file_path):
                 # Prefer pinned version over empty/unpinned
-                if pkg not in all_packages or (ver and not all_packages[pkg]):
-                    all_packages[pkg] = ver
+                if pkg not in python_packages or (ver and not python_packages[pkg]):
+                    python_packages[pkg] = ver
 
-    if not all_packages:
+    for filename, parser in npm_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in npm_packages or (ver and not npm_packages[pkg]):
+                    npm_packages[pkg] = ver
+
+    if not python_packages and not npm_packages:
         return []
 
-    # Fan out all OSV queries concurrently
-    tasks = [_query_osv(pkg, ver) for pkg, ver in all_packages.items()]
+    # Fan out all OSV queries concurrently across ecosystems
+    tasks = (
+        [_query_osv(pkg, ver, "PyPI") for pkg, ver in python_packages.items()]
+        + [_query_osv(pkg, ver, "npm") for pkg, ver in npm_packages.items()]
+    )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     findings: List[DepVulnerability] = []

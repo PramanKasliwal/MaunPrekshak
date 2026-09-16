@@ -164,6 +164,48 @@ class TestExtendedSASTRules:
         check_ids = [f.check_id for f in findings]
         assert "MP018" in check_ids
 
+    def test_detects_paramiko_auto_add_policy(self, tmp_path):
+        path = write_py(tmp_path, "ssh.py", 'import paramiko\nclient.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP019" in check_ids
+
+    def test_detects_jwt_unverified_options(self, tmp_path):
+        path = write_py(tmp_path, "auth.py", 'import jwt\npayload = jwt.decode(token, options={"verify_signature": False})\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP020" in check_ids
+
+    def test_detects_jwt_verify_false(self, tmp_path):
+        path = write_py(tmp_path, "auth.py", 'import jwt\npayload = jwt.decode(token, verify=False)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP020" in check_ids
+
+    def test_detects_insecure_chmod(self, tmp_path):
+        path = write_py(tmp_path, "perm.py", 'import os\nos.chmod("/tmp/secret", 0o777)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP021" in check_ids
+
+    def test_no_flag_on_safe_chmod(self, tmp_path):
+        path = write_py(tmp_path, "perm.py", 'import os\nos.chmod("/path/safe", 0o600)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP021" not in check_ids
+
+    def test_detects_legacy_xml_parsers(self, tmp_path):
+        path = write_py(tmp_path, "parse_xml.py", 'from xml.dom import minidom\ndoc = minidom.parse("data.xml")\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP022" in check_ids
+
+    def test_detects_xml_sax_make_parser(self, tmp_path):
+        path = write_py(tmp_path, "parse_sax.py", 'import xml.sax\np = xml.sax.make_parser()\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP022" in check_ids
+
     def test_target_files_filters_sast_scan(self, tmp_path):
         vuln = tmp_path / "vuln.py"
         vuln.write_text('eval("1+1")\n')

@@ -9,6 +9,8 @@ from maunprekshak.scanner.deps import (
     parse_poetry_lock,
     parse_pipfile_lock,
     parse_uv_lock,
+    parse_package_json,
+    parse_package_lock_json,
     scan_dependencies,
 )
 
@@ -217,4 +219,91 @@ class TestLockfileParsers:
         packages = parse_uv_lock(str(lock))
         assert ("httpx", "0.27.0") in packages
         assert ("certifi", "2024.2.2") in packages
+
+
+SAMPLE_PACKAGE_JSON = """{
+  "name": "my-app",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "express": "~4.18.2",
+    "unpinned": "*"
+  },
+  "devDependencies": {
+    "mocha": ">=10.2.0"
+  }
+}"""
+
+SAMPLE_PACKAGE_LOCK_V1 = """{
+  "name": "my-app",
+  "lockfileVersion": 1,
+  "dependencies": {
+    "lodash": {
+      "version": "4.17.20"
+    }
+  }
+}"""
+
+SAMPLE_PACKAGE_LOCK_V2 = """{
+  "name": "my-app",
+  "lockfileVersion": 2,
+  "packages": {
+    "": { "name": "my-app" },
+    "node_modules/lodash": {
+      "version": "4.17.21"
+    },
+    "node_modules/@types/node": {
+      "version": "20.1.0"
+    }
+  }
+}"""
+
+
+class TestNPMParsers:
+    def test_parse_package_json(self, tmp_path):
+        pj = tmp_path / "package.json"
+        pj.write_text(SAMPLE_PACKAGE_JSON)
+        packages = parse_package_json(str(pj))
+        assert ("axios", "1.6.0") in packages
+        assert ("express", "4.18.2") in packages
+        assert ("mocha", "10.2.0") in packages
+        assert ("unpinned", "") in packages
+
+    def test_parse_package_lock_v1(self, tmp_path):
+        lock = tmp_path / "package-lock.json"
+        lock.write_text(SAMPLE_PACKAGE_LOCK_V1)
+        packages = parse_package_lock_json(str(lock))
+        assert ("lodash", "4.17.20") in packages
+
+    def test_parse_package_lock_v2(self, tmp_path):
+        lock = tmp_path / "package-lock.json"
+        lock.write_text(SAMPLE_PACKAGE_LOCK_V2)
+        packages = parse_package_lock_json(str(lock))
+        assert ("lodash", "4.17.21") in packages
+        assert ("@types/node", "20.1.0") in packages
+
+    @pytest.mark.asyncio
+    async def test_scan_dependencies_with_package_json(self, tmp_path):
+        pj = tmp_path / "package.json"
+        pj.write_text('{"dependencies": {"lodash": "4.17.20"}}')
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "vulns": [{
+                    "id": "GHSA-p6mc-m468-83gw",
+                    "summary": "Regular Expression Denial of Service in lodash",
+                    "severity": [{"type": "CVSS_V3", "score": "7.5"}],
+                    "affected": [{"ranges": [{"events": [{"fixed": "4.17.21"}]}]}]
+                }]
+            }
+            mock_response.status_code = 200
+            mock_post.return_value = mock_response
+
+            vulns = await scan_dependencies(str(tmp_path))
+
+        assert len(vulns) == 1
+        assert vulns[0].package == "lodash"
+        assert vulns[0].version == "4.17.20"
+        assert vulns[0].severity == "HIGH"
+        assert vulns[0].fix_version == "4.17.21"
 

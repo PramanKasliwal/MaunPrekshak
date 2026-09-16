@@ -28,6 +28,10 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP016  Wildcard network binding      MEDIUM
 # MP017  Hardcoded /tmp file usage     MEDIUM
 # MP018  Unsafe shelve/jsonpickle      HIGH
+# MP019  paramiko AutoAddPolicy (SSH)  HIGH
+# MP020  jwt.decode() without verify   HIGH
+# MP021  os.chmod() world-writable     MEDIUM
+# MP022  legacy XML parser (XXE)       MEDIUM
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -76,11 +80,23 @@ class SecurityVisitor(ast.NodeVisitor):
                 return True
         return False
 
+    def _get_full_func_name(self, node: ast.Call) -> str:
+        """Get full dotted function name from a Call node."""
+        parts = []
+        curr = node.func
+        while isinstance(curr, ast.Attribute):
+            parts.append(curr.attr)
+            curr = curr.value
+        if isinstance(curr, ast.Name):
+            parts.append(curr.id)
+        return ".".join(reversed(parts))
+
     # ── Visitors ──────────────────────────────────────────────────────────────
 
     def visit_Call(self, node: ast.Call) -> None:
         func_name = self._get_func_name(node)
         obj, method = self._get_attr_chain(node)
+        full_func = self._get_full_func_name(node)
 
         # MP001 — eval()
         if func_name == "eval":
@@ -176,6 +192,21 @@ class SecurityVisitor(ast.NodeVisitor):
                               "Use parameterized queries with placeholders: "
                               "cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,)).")
 
+        # MP020 — Unverified JWT decode
+        elif (obj == "jwt" and method == "decode") or full_func in ("jwt.decode", "jwt.api_jwt.decode"):
+            has_verify_false = self._has_keyword(node, "verify", False)
+            has_unverified_sig = False
+            for kw in node.keywords:
+                if kw.arg == "options" and isinstance(kw.value, ast.Dict):
+                    for k, v in zip(kw.value.keys, kw.value.values):
+                        if isinstance(k, ast.Constant) and k.value == "verify_signature":
+                            if isinstance(v, ast.Constant) and v.value is False:
+                                has_unverified_sig = True
+            if has_verify_false or has_unverified_sig:
+                self._add(node, "MP020", Severity.HIGH.value,
+                          "jwt.decode() called without signature verification — token tampering and authentication bypass risk",
+                          "Always verify JWT signatures using a secret key and expected algorithms: jwt.decode(token, secret, algorithms=['HS256']).")
+
         # MP015 — Insecure SSL/TLS verification disabled
         elif self._has_keyword(node, "verify", False) or (obj == "ssl" and method == "_create_unverified_context"):
             self._add(node, "MP015", Severity.HIGH.value,
@@ -205,6 +236,37 @@ class SecurityVisitor(ast.NodeVisitor):
             self._add(node, "MP018", Severity.HIGH.value,
                       f"Unsafe deserialization with {obj}.{method}() — arbitrary code execution risk",
                       f"Avoid {obj}.{method}() on untrusted data. Use safe serialization formats like JSON.")
+
+        # MP019 — Insecure paramiko SSH host key policy
+        elif (obj == "paramiko" and method in ("AutoAddPolicy", "WarningPolicy")) or full_func in (
+            "paramiko.AutoAddPolicy", "paramiko.WarningPolicy",
+            "paramiko.client.AutoAddPolicy", "paramiko.client.WarningPolicy",
+        ) or func_name in ("AutoAddPolicy", "WarningPolicy"):
+            self._add(node, "MP019", Severity.HIGH.value,
+                      f"paramiko {method or func_name}() automatically trusts unknown SSH host keys — vulnerable to Man-in-the-Middle attacks",
+                      "Use paramiko.RejectPolicy() and verify host keys explicitly with client.load_system_host_keys().")
+
+        # MP021 — Insecure chmod permissions (world-writable 0o777 / 0o002)
+        elif ((obj == "os" and method == "chmod") or full_func == "os.chmod") and len(node.args) >= 2:
+            arg1 = node.args[1]
+            if isinstance(arg1, ast.Constant) and isinstance(arg1.value, int):
+                if (arg1.value & 0o002) != 0:
+                    self._add(node, "MP021", Severity.MEDIUM.value,
+                              f"os.chmod() sets world-writable permissions ({oct(arg1.value)}) — local privilege escalation risk",
+                              "Use restrictive permissions such as 0o600 for sensitive files or 0o700 for private directories.")
+
+        # MP022 — Insecure legacy XML parsers (minidom, pulldom, sax)
+        elif (
+            full_func in (
+                "xml.sax.make_parser", "xml.dom.minidom.parse", "xml.dom.minidom.parseString",
+                "xml.dom.pulldom.parse", "xml.dom.pulldom.parseString"
+            )
+            or (obj in ("minidom", "pulldom") and method in ("parse", "parseString"))
+            or (obj == "sax" and method == "make_parser")
+        ):
+            self._add(node, "MP022", Severity.MEDIUM.value,
+                      "Legacy standard library XML parser is vulnerable to XML entity expansion and XXE attacks",
+                      "Use defusedxml (defusedxml.minidom, defusedxml.sax) to safely parse untrusted XML documents.")
 
         self.generic_visit(node)
 
