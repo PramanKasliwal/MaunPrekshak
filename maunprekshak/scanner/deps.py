@@ -212,6 +212,147 @@ def parse_package_lock_json(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_yarn_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse yarn.lock (v1 and v2/Berry) and extract package names and pinned versions.
+    """
+    packages: List[tuple[str, str]] = []
+    current_pkg: Optional[str] = None
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+
+                if not line.startswith(" ") and not line.startswith("\t") and (stripped.endswith(":") or stripped.endswith(",")):
+                    first_entry = stripped.split(",")[0].strip().rstrip(":").strip('"').strip("'")
+                    if "@" in first_entry:
+                        idx = first_entry.rfind("@")
+                        if idx > 0:
+                            current_pkg = first_entry[:idx].strip()
+                        else:
+                            current_pkg = None
+                    else:
+                        current_pkg = first_entry
+                elif current_pkg and (line.startswith(" ") or line.startswith("\t")):
+                    if stripped.startswith("version ") or stripped.startswith("version:"):
+                        ver_str = stripped.split(None, 1)[1].strip().strip('"').strip("'")
+                        if ver_str:
+                            packages.append((current_pkg.lower(), ver_str))
+                        current_pkg = None
+    except Exception:
+        pass
+    return packages
+
+
+def parse_pnpm_lock_yaml(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse pnpm-lock.yaml and extract pinned package names and versions.
+    Supports pnpm lockfile schemas (v5, v6, v9).
+    """
+    packages: List[tuple[str, str]] = []
+    in_packages_section = False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+
+                if line.startswith("packages:"):
+                    in_packages_section = True
+                    continue
+                elif not line.startswith(" ") and not line.startswith("\t") and in_packages_section:
+                    break
+
+                if in_packages_section and (line.startswith("  ") or line.startswith("\t")):
+                    if stripped.endswith(":"):
+                        entry = stripped.rstrip(":").strip("'\"").lstrip("/")
+                        if "@" in entry:
+                            idx = entry.rfind("@")
+                            if idx > 0:
+                                name = entry[:idx]
+                                ver = entry[idx + 1:]
+                                ver = ver.split("(")[0].strip()
+                                if name and ver and re.match(r"^\d", ver):
+                                    packages.append((name.lower(), ver))
+                        elif "/" in entry:
+                            parts = entry.rsplit("/", 1)
+                            if len(parts) == 2:
+                                name, ver = parts
+                                ver = ver.split("(")[0].strip()
+                                if name and ver and re.match(r"^\d", ver):
+                                    packages.append((name.lower(), ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_go_mod(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a go.mod file and extract required modules and versions.
+    Handles both single-line 'require mod version' and 'require ( ... )' blocks.
+    """
+    packages: List[tuple[str, str]] = []
+    in_require_block = False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("//"):
+                    continue
+
+                if line == "require (" or line.startswith("require ("):
+                    in_require_block = True
+                    continue
+                elif in_require_block and line == ")":
+                    in_require_block = False
+                    continue
+
+                clean_line = line.split("//")[0].strip()
+
+                if in_require_block:
+                    parts = clean_line.split()
+                    if len(parts) >= 2:
+                        mod_name = parts[0]
+                        version = parts[1]
+                        packages.append((mod_name, version))
+                elif clean_line.startswith("require "):
+                    parts = clean_line[len("require "):].strip().split()
+                    if len(parts) >= 2:
+                        mod_name = parts[0]
+                        version = parts[1]
+                        packages.append((mod_name, version))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_go_sum(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a go.sum file and extract unique pinned modules and versions.
+    Lines follow: <module> <version>[/go.mod] <hash>
+    """
+    packages_map: Dict[str, str] = {}
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("//"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 3:
+                    mod_name = parts[0]
+                    ver_raw = parts[1].split("/go.mod")[0]
+                    if mod_name and ver_raw:
+                        packages_map[mod_name] = ver_raw
+    except Exception:
+        pass
+    return list(packages_map.items())
+
+
+
 # ─── OSV.dev API ──────────────────────────────────────────────────────────────
 
 def _cvss_to_severity(cvss_score: float) -> str:
@@ -316,7 +457,8 @@ async def scan_dependencies(
     Scan all dependency files in a project directory for known CVEs.
 
     Looks for Python manifests: poetry.lock, Pipfile.lock, uv.lock, requirements.txt, pyproject.toml, Pipfile
-    Looks for JavaScript/npm manifests: package-lock.json, package.json
+    Looks for JavaScript/npm manifests: package-lock.json, yarn.lock, pnpm-lock.yaml, package.json
+    Looks for Go manifests: go.sum, go.mod
 
     Args:
         path: Absolute path to the project root directory.
@@ -327,6 +469,7 @@ async def scan_dependencies(
     """
     python_packages: Dict[str, str] = {}
     npm_packages: Dict[str, str] = {}
+    go_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -338,13 +481,18 @@ async def scan_dependencies(
     ]
     npm_parsers = [
         ("package-lock.json", parse_package_lock_json),
+        ("yarn.lock", parse_yarn_lock),
+        ("pnpm-lock.yaml", parse_pnpm_lock_yaml),
         ("package.json", parse_package_json),
+    ]
+    go_parsers = [
+        ("go.sum", parse_go_sum),
+        ("go.mod", parse_go_mod),
     ]
 
     for filename, parser in python_parsers:
         file_path = os.path.join(path, filename)
         if target_files is not None:
-            # Only scan if this dependency file is among the target files
             target_matched = any(
                 os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
                 for f in target_files
@@ -354,7 +502,6 @@ async def scan_dependencies(
 
         if os.path.exists(file_path):
             for pkg, ver in parser(file_path):
-                # Prefer pinned version over empty/unpinned
                 if pkg not in python_packages or (ver and not python_packages[pkg]):
                     python_packages[pkg] = ver
 
@@ -373,13 +520,29 @@ async def scan_dependencies(
                 if pkg not in npm_packages or (ver and not npm_packages[pkg]):
                     npm_packages[pkg] = ver
 
-    if not python_packages and not npm_packages:
+    for filename, parser in go_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in go_packages or (ver and not go_packages[pkg]):
+                    go_packages[pkg] = ver
+
+    if not python_packages and not npm_packages and not go_packages:
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
     tasks = (
         [_query_osv(pkg, ver, "PyPI") for pkg, ver in python_packages.items()]
         + [_query_osv(pkg, ver, "npm") for pkg, ver in npm_packages.items()]
+        + [_query_osv(pkg, ver, "Go") for pkg, ver in go_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

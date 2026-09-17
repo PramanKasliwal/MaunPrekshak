@@ -32,6 +32,10 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP020  jwt.decode() without verify   HIGH
 # MP021  os.chmod() world-writable     MEDIUM
 # MP022  legacy XML parser (XXE)       MEDIUM
+# MP023  tarfile.extractall() Zip Slip HIGH
+# MP024  urllib SSRF / URL injection   HIGH
+# MP025  Insecure cipher / ECB mode    HIGH
+# MP026  dill deserialization          HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -267,6 +271,51 @@ class SecurityVisitor(ast.NodeVisitor):
             self._add(node, "MP022", Severity.MEDIUM.value,
                       "Legacy standard library XML parser is vulnerable to XML entity expansion and XXE attacks",
                       "Use defusedxml (defusedxml.minidom, defusedxml.sax) to safely parse untrusted XML documents.")
+
+        # MP023 — tarfile.extractall() directory traversal / Zip Slip (CVE-2007-4559)
+        elif (
+            (method == "extractall" and obj in ("tarfile", "tar", "archive", "tf"))
+            or full_func.endswith(".extractall")
+            or full_func in ("tarfile.extractall", "tarfile.TarFile.extractall")
+        ):
+            has_safe_filter = False
+            for kw in node.keywords:
+                if kw.arg == "filter" and isinstance(kw.value, ast.Constant) and kw.value.value in ("data", "tar"):
+                    has_safe_filter = True
+            if not has_safe_filter:
+                self._add(node, "MP023", Severity.HIGH.value,
+                          "tarfile.extractall() without a safe filter is vulnerable to directory traversal (Zip Slip / CVE-2007-4559)",
+                          "Use filter='data' (Python 3.12+) or sanitize member paths before extraction.")
+
+        # MP024 — SSRF via urllib.request.urlopen / urlretrieve
+        elif (
+            full_func in ("urllib.request.urlopen", "urllib.request.urlretrieve", "urllib.urlopen", "urllib.urlretrieve")
+            or (obj in ("urllib.request", "request") and method in ("urlopen", "urlretrieve"))
+            or (obj == "urllib" and method in ("urlopen", "urlretrieve"))
+        ):
+            self._add(node, "MP024", Severity.HIGH.value,
+                      f"urllib.request.{method}() is vulnerable to Server-Side Request Forgery (SSRF) and scheme injection",
+                      "Validate URL scheme against an allowlist (https only) and restrict target host, or use httpx/requests with strict timeouts.")
+
+        # MP025 — Insecure Cipher Mode (ECB) or weak ciphers (DES, RC4, Blowfish)
+        elif (
+            full_func in (
+                "modes.ECB", "ciphers.modes.ECB", "AES.MODE_ECB", "DES.new", "ARC4.new", "Blowfish.new",
+            )
+            or (obj == "modes" and method == "ECB")
+            or (obj == "AES" and method == "MODE_ECB")
+            or (obj in ("DES", "ARC4", "Blowfish") and method == "new")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "MODE_ECB")
+        ):
+            self._add(node, "MP025", Severity.HIGH.value,
+                      "Insecure cryptographic cipher mode (ECB) or weak cipher (DES/RC4) detected",
+                      "Use secure authenticated encryption like AES-GCM (modes.GCM) or ChaCha20-Poly1305.")
+
+        # MP026 — Unsafe dill deserialization
+        elif (obj == "dill" and method in ("load", "loads")) or full_func in ("dill.load", "dill.loads"):
+            self._add(node, "MP026", Severity.HIGH.value,
+                      f"Unsafe deserialization with dill.{method}() executes arbitrary Python bytecode",
+                      "Never deserialize untrusted input with dill. Use safe structured serialization like JSON.")
 
         self.generic_visit(node)
 

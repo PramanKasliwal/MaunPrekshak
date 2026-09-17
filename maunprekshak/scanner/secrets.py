@@ -21,6 +21,9 @@ PATTERNS = {
     "SSH Private Key": r"-----BEGIN OPENSSH PRIVATE KEY-----",
     "RSA Private Key": r"-----BEGIN RSA PRIVATE KEY-----",
     "JWT Secret": r"(?i)(jwt_secret|jwt_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]",
+    "OpenAI API Key": r"(?i)(?:sk-[A-Za-z0-9]{48}|sk-proj-[A-Za-z0-9_\-]{80,})",
+    "Anthropic API Key": r"(?i)sk-ant-[A-Za-z0-9_\-]{80,}",
+    "HuggingFace Token": r"hf_[A-Za-z0-9]{34}",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 
@@ -197,7 +200,7 @@ def scan_secrets(
     if exclude:
         exclude_dirs.update(exclude)
 
-    valid_extensions = {".py", ".yaml", ".yml", ".json", ".cfg", ".ini", ".toml", ".pem", ".key"}
+    valid_extensions = {".py", ".yaml", ".yml", ".json", ".cfg", ".ini", ".toml", ".pem", ".key", ".go", ".js", ".ts", ".env"}
     compiled_patterns = {name: re.compile(pattern) for name, pattern in PATTERNS.items()}
 
     # If target_files is provided, only inspect those files

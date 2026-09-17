@@ -206,6 +206,42 @@ class TestExtendedSASTRules:
         check_ids = [f.check_id for f in findings]
         assert "MP022" in check_ids
 
+    def test_detects_tarfile_extractall_zipslip(self, tmp_path):
+        path = write_py(tmp_path, "extract.py", 'import tarfile\ntf = tarfile.open("archive.tar")\ntf.extractall("/path/dest")\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP023" in check_ids
+
+    def test_no_flag_on_safe_tarfile_filter(self, tmp_path):
+        path = write_py(tmp_path, "extract.py", 'import tarfile\ntf = tarfile.open("archive.tar")\ntf.extractall("/path/dest", filter="data")\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP023" not in check_ids
+
+    def test_detects_urllib_ssrf(self, tmp_path):
+        path = write_py(tmp_path, "req.py", 'import urllib.request\nurllib.request.urlopen(user_url)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP024" in check_ids
+
+    def test_detects_insecure_ecb_cipher(self, tmp_path):
+        path = write_py(tmp_path, "crypto.py", 'from cryptography.hazmat.primitives.ciphers import modes\nmode = modes.ECB()\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP025" in check_ids
+
+    def test_no_flag_on_safe_gcm_cipher(self, tmp_path):
+        path = write_py(tmp_path, "crypto.py", 'from cryptography.hazmat.primitives.ciphers import modes\nmode = modes.GCM(nonce)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP025" not in check_ids
+
+    def test_detects_dill_loads(self, tmp_path):
+        path = write_py(tmp_path, "deserialize.py", 'import dill\nobj = dill.loads(payload)\n')
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP026" in check_ids
+
     def test_target_files_filters_sast_scan(self, tmp_path):
         vuln = tmp_path / "vuln.py"
         vuln.write_text('eval("1+1")\n')
@@ -217,4 +253,5 @@ class TestExtendedSASTRules:
 
         findings_vuln = scan_sast(str(tmp_path), target_files=[str(vuln)])
         assert len(findings_vuln) > 0
+
 

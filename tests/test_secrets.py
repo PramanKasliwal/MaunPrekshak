@@ -16,8 +16,44 @@ def _stripe_key():
     return "sk_live_" + py_secrets.token_hex(12)
 
 
+def _openai_proj_key():
+    chars = string.ascii_letters + string.digits + "_-"
+    return "sk-proj-" + "".join(py_secrets.choice(chars) for _ in range(85))
+
+
+def _anthropic_key():
+    chars = string.ascii_letters + string.digits + "_-"
+    return "sk-ant-" + "".join(py_secrets.choice(chars) for _ in range(85))
+
+
+def _huggingface_token():
+    chars = string.ascii_letters + string.digits
+    return "hf_" + "".join(py_secrets.choice(chars) for _ in range(34))
+
+
 class TestSecretPatterns:
     """Test that regex patterns correctly identify known secret formats."""
+
+    def test_detects_openai_key(self, tmp_path):
+        py_file = tmp_path / "ai.py"
+        py_file.write_text(f'OPENAI_API_KEY = "{_openai_proj_key()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "OpenAI API Key" in secret_types
+
+    def test_detects_anthropic_key(self, tmp_path):
+        py_file = tmp_path / "ai.py"
+        py_file.write_text(f'ANTHROPIC_API_KEY = "{_anthropic_key()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "Anthropic API Key" in secret_types
+
+    def test_detects_huggingface_token(self, tmp_path):
+        py_file = tmp_path / "ai.py"
+        py_file.write_text(f'HF_TOKEN = "{_huggingface_token()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "HuggingFace Token" in secret_types
 
     def test_detects_aws_access_key(self, tmp_path):
         py_file = tmp_path / "config.py"
