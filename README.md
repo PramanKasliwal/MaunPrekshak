@@ -38,12 +38,31 @@ pip install maunprekshak
 curl -sSL https://raw.githubusercontent.com/PramanKasliwal/maunprekshak/main/install.sh | bash
 ```
 
+### 🪟 Windows (1-Line PowerShell Install — Configures PATH Automatically)
+
+```powershell
+irm https://raw.githubusercontent.com/PramanKasliwal/maunprekshak/main/install.ps1 | iex
+```
+
 ### 🐍 Via PyPI (Any OS)
 ```bash
 pip install maunprekshak
-# or using pipx (recommended for Ubuntu 24.04+)
+# or using pipx (recommended for Windows & Ubuntu 24.04+)
 pipx install maunprekshak
+pipx ensurepath
 ```
+
+> **Windows Tip**: If `mp` is not recognized after a standard `pip install`, run directly via the Python module:
+> ```cmd
+> python -m maunprekshak scan .
+> # or using py launcher
+> py -m maunprekshak scan .
+> ```
+> Or permanently add Python's `Scripts\` folder to your user PATH via PowerShell:
+> ```powershell
+> $scriptsDir = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+> [Environment]::SetEnvironmentVariable("PATH", "$([Environment]::GetEnvironmentVariable('PATH', 'User'));$scriptsDir", "User")
+> ```
 
 Basic Scan
 
@@ -105,7 +124,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.6.0
+        uses: PramanKasliwal/maunprekshak@v0.6.1
         with:
           fail-on: high
           output: sarif
@@ -127,7 +146,7 @@ Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to y
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.6.0
+    rev: v0.6.1
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high"]

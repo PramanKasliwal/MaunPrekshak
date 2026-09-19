@@ -140,3 +140,15 @@ def test_scan_diff_with_files(tmp_path):
         assert result.exit_code == 0
         assert '"total": 0' in result.stdout
 
+
+def test_python_m_maunprekshak_module_execution():
+    import sys
+    import subprocess
+    res = subprocess.run(
+        [sys.executable, "-m", "maunprekshak", "version"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0
+    assert "MaunPrekshak" in res.stdout
+

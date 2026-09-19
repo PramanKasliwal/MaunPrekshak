@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.6.0
+    rev: v0.6.1
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high", "--no-ai"]
