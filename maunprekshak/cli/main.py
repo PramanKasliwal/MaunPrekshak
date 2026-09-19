@@ -1,3 +1,4 @@
+import json
 import typer
 import os
 import subprocess
@@ -74,6 +75,7 @@ def scan(
     exclude: Optional[str] = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
     staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
     diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
+    baseline: Optional[str] = typer.Option(None, "--baseline", help="Path to baseline JSON report to suppress existing findings"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -115,6 +117,51 @@ def scan(
             # Recalculate score after ignoring rules
             recalculated = aggregate(result.deps, result.secrets, result.sast)
             result.risk_score = recalculated.risk_score
+
+        # Apply baseline suppression if specified
+        if baseline:
+            if os.path.isfile(baseline):
+                try:
+                    with open(baseline, "r", encoding="utf-8") as bf:
+                        bdata = json.load(bf)
+                    base_deps = {
+                        (d.get("package", "").lower(), str(d.get("version", "")), str(d.get("cve_id", "")))
+                        for d in bdata.get("deps", [])
+                    }
+                    base_secrets = {
+                        (os.path.basename(s.get("file_path", "")), str(s.get("secret_type", "")))
+                        for s in bdata.get("secrets", [])
+                    }
+                    base_sast = {
+                        (os.path.basename(s.get("file_path", "")), str(s.get("check_id", "")))
+                        for s in bdata.get("sast", [])
+                    }
+
+                    initial_total = result.total_findings
+                    result.deps = [
+                        d for d in result.deps
+                        if (d.package.lower(), str(d.version), str(d.cve_id)) not in base_deps
+                    ]
+                    result.secrets = [
+                        s for s in result.secrets
+                        if (os.path.basename(s.file_path), str(s.secret_type)) not in base_secrets
+                    ]
+                    result.sast = [
+                        s for s in result.sast
+                        if (os.path.basename(s.file_path), str(s.check_id)) not in base_sast
+                    ]
+                    suppressed = initial_total - result.total_findings
+                    if suppressed > 0 and output == "console":
+                        console.print(f"[bold cyan]Suppressed {suppressed} finding(s) matching baseline {baseline}[/bold cyan]")
+
+                    recalculated = aggregate(result.deps, result.secrets, result.sast)
+                    result.risk_score = recalculated.risk_score
+                except Exception as e:
+                    if output == "console":
+                        console.print(f"[yellow]Warning: Could not parse baseline file {baseline}: {e}[/yellow]")
+            else:
+                if output == "console":
+                    console.print(f"[yellow]Warning: Baseline file not found at {baseline}. Running scan without baseline.[/yellow]")
 
         if not effective_no_ai:
             status.update("[bold green]Generating AI summary...")

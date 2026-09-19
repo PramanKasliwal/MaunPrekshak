@@ -14,10 +14,10 @@
 
 ## ⚡ Highlights
 
-- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) across Python (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`), JavaScript/Node.js (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `package.json`), and Go modules (`go.sum`, `go.mod`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
-- 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors (including OpenAI `sk-proj-`, Anthropic `sk-ant-`, HuggingFace `hf_`, AWS, GitHub, Stripe) PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
-- 🛡️ **Static Code Analysis (SAST)**: 26 AST security rules (MP001–MP026) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, unsafe deserialization, paramiko AutoAddPolicy SSH MitM, unverified JWT decoding, world-writable chmod permissions, legacy XML XXE parsers, tarfile Zip Slip (CVE-2007-4559), urllib SSRF, ECB cipher modes, and dill bytecode execution.
-- ⚡ **Git Staged & Diff Scanning**: Fast pre-commit mode via `--staged` and `--diff` checking only modified files in milliseconds.
+- 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) across Python (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`), JavaScript/Node.js (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `package.json`), Go modules (`go.sum`, `go.mod`), and Rust crates (`Cargo.lock`, `Cargo.toml`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
+- 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors (including OpenAI `sk-proj-`, Anthropic `sk-ant-`, HuggingFace `hf_`, GitLab `glpat-`, GitHub Fine-Grained PAT `github_pat_`, Discord, HashiCorp Vault, AWS, Stripe) PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
+- 🛡️ **Static Code Analysis (SAST)**: 30 AST security rules (MP001–MP030) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, unsafe deserialization, paramiko AutoAddPolicy SSH MitM, unverified JWT decoding, world-writable chmod permissions, legacy XML XXE parsers, tarfile Zip Slip (CVE-2007-4559), urllib SSRF, ECB cipher modes, dill bytecode execution, Jinja2/Mako SSTI, pandas.read_pickle code execution, missing secure cookie flags, and hardcoded cryptographic IV/salt.
+- ⚡ **Git Staged, Diff & Baseline Scanning**: Fast pre-commit mode via `--staged`, diff checks via `--diff`, and legacy debt suppression via `--baseline`.
 - 🎨 **Rich Terminal & SARIF Export**: Formatted console output with risk gauges, and standard OASIS SARIF 2.1.0, JSON, or Markdown export.
 - 🔒 **100% Privacy & Local-First**: Scans run entirely on your local CPU. Your source code never leaves your machine.
 - 🤖 **Optional AI Remediation**: Plug in your Google Gemini API key for instant root-cause analysis and remediation steps.
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.5.0
+        uses: PramanKasliwal/maunprekshak@v0.6.0
         with:
           fail-on: high
           output: sarif
@@ -127,7 +127,7 @@ Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to y
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.5.0
+    rev: v0.6.0
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high"]
@@ -199,6 +199,7 @@ Top Findings:
 | `--exclude` | `None` | Comma-separated directories to exclude |
 | `--staged` | `false` | Scan only git staged files (instant pre-commit mode) |
 | `--diff` | `None` | Scan only files modified against a git ref (e.g. `HEAD~1`, `main`) |
+| `--baseline` | `None` | Path to baseline JSON report to suppress existing findings |
 
 ---
 

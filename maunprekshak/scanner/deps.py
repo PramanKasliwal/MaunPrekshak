@@ -352,6 +352,64 @@ def parse_go_sum(file_path: str) -> List[tuple[str, str]]:
     return list(packages_map.items())
 
 
+def parse_cargo_toml(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Cargo.toml file and extract crate dependencies and versions.
+    Checks [dependencies], [dev-dependencies], and [build-dependencies].
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+        sections = ["dependencies", "dev-dependencies", "build-dependencies"]
+        for sec in sections:
+            deps = data.get(sec, {})
+            if isinstance(deps, dict):
+                for name, spec in deps.items():
+                    name = str(name).strip()
+                    ver = ""
+                    if isinstance(spec, str):
+                        ver = re.sub(r"^[=><~^!]+", "", spec).strip()
+                    elif isinstance(spec, dict):
+                        ver_raw = str(spec.get("version", "")).strip()
+                        ver = re.sub(r"^[=><~^!]+", "", ver_raw).strip()
+                    if name:
+                        packages.append((name, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_cargo_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Cargo.lock file and extract pinned crate names and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+        for pkg in data.get("package", []):
+            name = str(pkg.get("name", "")).strip()
+            version = str(pkg.get("version", "")).strip()
+            if name and version:
+                packages.append((name, version))
+    except Exception:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                cur_name = None
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("name ="):
+                        cur_name = line.split("=", 1)[1].strip().strip('"\'')
+                    elif cur_name and line.startswith("version ="):
+                        ver = line.split("=", 1)[1].strip().strip('"\'')
+                        packages.append((cur_name, ver))
+                        cur_name = None
+        except Exception:
+            pass
+    return packages
+
+
 
 # ─── OSV.dev API ──────────────────────────────────────────────────────────────
 
@@ -470,6 +528,7 @@ async def scan_dependencies(
     python_packages: Dict[str, str] = {}
     npm_packages: Dict[str, str] = {}
     go_packages: Dict[str, str] = {}
+    cargo_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -488,6 +547,10 @@ async def scan_dependencies(
     go_parsers = [
         ("go.sum", parse_go_sum),
         ("go.mod", parse_go_mod),
+    ]
+    cargo_parsers = [
+        ("Cargo.lock", parse_cargo_lock),
+        ("Cargo.toml", parse_cargo_toml),
     ]
 
     for filename, parser in python_parsers:
@@ -535,7 +598,22 @@ async def scan_dependencies(
                 if pkg not in go_packages or (ver and not go_packages[pkg]):
                     go_packages[pkg] = ver
 
-    if not python_packages and not npm_packages and not go_packages:
+    for filename, parser in cargo_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in cargo_packages or (ver and not cargo_packages[pkg]):
+                    cargo_packages[pkg] = ver
+
+    if not python_packages and not npm_packages and not go_packages and not cargo_packages:
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -543,6 +621,7 @@ async def scan_dependencies(
         [_query_osv(pkg, ver, "PyPI") for pkg, ver in python_packages.items()]
         + [_query_osv(pkg, ver, "npm") for pkg, ver in npm_packages.items()]
         + [_query_osv(pkg, ver, "Go") for pkg, ver in go_packages.items()]
+        + [_query_osv(pkg, ver, "crates.io") for pkg, ver in cargo_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

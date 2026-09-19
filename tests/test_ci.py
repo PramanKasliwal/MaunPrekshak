@@ -39,3 +39,22 @@ def test_ci_uses_findings_after_rule_exclusions(tmp_path):
     )
     assert result.exit_code == 0
     assert '"total": 0' in result.stdout
+
+
+def test_ci_suppresses_findings_matching_baseline(tmp_path):
+    """Baseline report must suppress known findings from failing CI."""
+    (tmp_path / "app.py").write_text("requests.get(url, verify=False)\n")
+    runner = CliRunner()
+    res1 = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--only", "sast", "--no-ai", "--output", "json"],
+    )
+    baseline_file = tmp_path / "baseline.json"
+    baseline_file.write_text(res1.stdout)
+
+    res2 = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--only", "sast", "--no-ai", "--ci", "--fail-on", "high", "--baseline", str(baseline_file), "--output", "json"],
+    )
+    assert res2.exit_code == 0
+    assert '"total": 0' in res2.stdout

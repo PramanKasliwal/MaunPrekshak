@@ -24,6 +24,10 @@ PATTERNS = {
     "OpenAI API Key": r"(?i)(?:sk-[A-Za-z0-9]{48}|sk-proj-[A-Za-z0-9_\-]{80,})",
     "Anthropic API Key": r"(?i)sk-ant-[A-Za-z0-9_\-]{80,}",
     "HuggingFace Token": r"hf_[A-Za-z0-9]{34}",
+    "GitLab Personal Access Token": r"(?i)glpat-[0-9a-zA-Z_\-]{20,}",
+    "GitHub Fine-Grained PAT": r"github_pat_[0-9a-zA-Z_]{82}",
+    "Discord Bot Token": r"(?i)(?:bot\s+)?[MN][A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,39}",
+    "HashiCorp Vault Token": r"(?i)(?:hvs\.[a-zA-Z0-9_-]{24,}|s\.[a-zA-Z0-9]{24,})",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

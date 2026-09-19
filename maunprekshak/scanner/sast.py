@@ -36,6 +36,10 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP024  urllib SSRF / URL injection   HIGH
 # MP025  Insecure cipher / ECB mode    HIGH
 # MP026  dill deserialization          HIGH
+# MP027  Server-Side Template (SSTI)   HIGH
+# MP028  pandas.read_pickle() code exec HIGH
+# MP029  Missing secure cookie flags   MEDIUM
+# MP030  Hardcoded crypto IV or salt   HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -316,6 +320,69 @@ class SecurityVisitor(ast.NodeVisitor):
             self._add(node, "MP026", Severity.HIGH.value,
                       f"Unsafe deserialization with dill.{method}() executes arbitrary Python bytecode",
                       "Never deserialize untrusted input with dill. Use safe structured serialization like JSON.")
+
+        # MP027 — Server-Side Template Injection (SSTI) in Jinja2 / Mako
+        elif (
+            (method in ("Template", "from_string") and obj in ("jinja2", "Environment", "env"))
+            or full_func in ("jinja2.Template", "jinja2.Environment.from_string", "Environment.from_string", "mako.template.Template")
+            or (func_name == "Template" and obj == "")
+        ):
+            if node.args:
+                first_arg = node.args[0]
+                is_dynamic = (
+                    isinstance(first_arg, (ast.JoinedStr, ast.BinOp))
+                    or (isinstance(first_arg, ast.Call) and isinstance(first_arg.func, ast.Attribute) and first_arg.func.attr == "format")
+                )
+                if is_dynamic:
+                    self._add(node, "MP027", Severity.HIGH.value,
+                              "Server-Side Template Injection (SSTI) risk: template instantiated with dynamic string formatting",
+                              "Pass data via template context parameters (e.g. template.render(key=value)) instead of formatting the template string.")
+
+        # MP028 — Unsafe deserialization with pandas.read_pickle
+        elif (
+            (obj in ("pandas", "pd") and method == "read_pickle")
+            or full_func in ("pandas.read_pickle", "pd.read_pickle")
+            or (func_name == "read_pickle" and isinstance(node.func, ast.Attribute) and node.func.attr == "read_pickle")
+        ):
+            self._add(node, "MP028", Severity.HIGH.value,
+                      "Unsafe deserialization: pandas.read_pickle() can execute arbitrary code on untrusted pickle files",
+                      "Use safe formats such as Parquet (pandas.read_parquet), Arrow, or Feather instead of pickle.")
+
+        # MP029 — Missing Cookie Security Flags (httponly, secure)
+        elif method == "set_cookie" or (isinstance(node.func, ast.Attribute) and node.func.attr == "set_cookie"):
+            has_httponly = False
+            has_secure = False
+            for kw in node.keywords:
+                if kw.arg == "httponly" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    has_httponly = True
+                elif kw.arg == "secure" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    has_secure = True
+            if not (has_httponly and has_secure):
+                self._add(node, "MP029", Severity.MEDIUM.value,
+                          "response.set_cookie() called without secure flags (httponly=True, secure=True)",
+                          "Always include httponly=True and secure=True (and samesite='Lax'/'Strict') when setting cookies.")
+
+        # MP030 — Hardcoded Cryptographic IV or Salt
+        elif (
+            (obj == "modes" and method in ("CBC", "CTR", "CFB", "OFB"))
+            or full_func in ("modes.CBC", "modes.CTR", "modes.CFB", "modes.OFB", "ciphers.modes.CBC", "ciphers.modes.CTR")
+            or (obj == "hashlib" and method == "pbkdf2_hmac")
+            or full_func == "hashlib.pbkdf2_hmac"
+        ):
+            is_hardcoded = False
+            if method in ("CBC", "CTR", "CFB", "OFB") and node.args:
+                if isinstance(node.args[0], ast.Constant):
+                    is_hardcoded = True
+            elif method == "pbkdf2_hmac":
+                for kw in node.keywords:
+                    if kw.arg == "salt" and isinstance(kw.value, ast.Constant):
+                        is_hardcoded = True
+                if len(node.args) >= 3 and isinstance(node.args[2], ast.Constant):
+                    is_hardcoded = True
+            if is_hardcoded:
+                self._add(node, "MP030", Severity.HIGH.value,
+                          "Hardcoded cryptographic IV or salt detected — predictable values weaken encryption and hashing",
+                          "Generate dynamic, cryptographically secure random IVs and salts using os.urandom() or secrets.token_bytes().")
 
         self.generic_visit(node)
 

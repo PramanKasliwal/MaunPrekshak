@@ -242,6 +242,62 @@ class TestExtendedSASTRules:
         check_ids = [f.check_id for f in findings]
         assert "MP026" in check_ids
 
+    def test_detects_jinja2_ssti(self, tmp_path):
+        code = 'import jinja2\nuser_name = "guest"\ntemplate = jinja2.Template(f"Hello {user_name}!")\n'
+        path = write_py(tmp_path, "ssti.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP027" in check_ids
+
+    def test_no_flag_on_static_jinja2_template(self, tmp_path):
+        code = 'import jinja2\ntemplate = jinja2.Template("Hello {{ name }}!")\nresult = template.render(name="Alice")\n'
+        path = write_py(tmp_path, "safe_template.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP027" not in check_ids
+
+    def test_detects_pandas_read_pickle(self, tmp_path):
+        code = 'import pandas as pd\ndf = pd.read_pickle("user_data.pkl")\n'
+        path = write_py(tmp_path, "ds_pickle.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP028" in check_ids
+
+    def test_no_flag_on_pandas_read_parquet(self, tmp_path):
+        code = 'import pandas as pd\ndf = pd.read_parquet("user_data.parquet")\n'
+        path = write_py(tmp_path, "ds_parquet.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP028" not in check_ids
+
+    def test_detects_insecure_cookie_missing_flags(self, tmp_path):
+        code = 'response.set_cookie("session_id", "xyz123")\n'
+        path = write_py(tmp_path, "cookie_insecure.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP029" in check_ids
+
+    def test_no_flag_on_secure_cookie(self, tmp_path):
+        code = 'response.set_cookie("session_id", "xyz123", httponly=True, secure=True, samesite="Lax")\n'
+        path = write_py(tmp_path, "cookie_secure.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP029" not in check_ids
+
+    def test_detects_hardcoded_crypto_iv_and_salt(self, tmp_path):
+        code = 'from cryptography.hazmat.primitives.ciphers import modes\nmode = modes.CBC(b"1234567890123456")\n'
+        path = write_py(tmp_path, "crypto_iv.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP030" in check_ids
+
+    def test_no_flag_on_dynamic_iv_and_salt(self, tmp_path):
+        code = 'import os\nfrom cryptography.hazmat.primitives.ciphers import modes\niv = os.urandom(16)\nmode = modes.CBC(iv)\n'
+        path = write_py(tmp_path, "crypto_dynamic.py", code)
+        findings = scan_sast(path)
+        check_ids = [f.check_id for f in findings]
+        assert "MP030" not in check_ids
+
     def test_target_files_filters_sast_scan(self, tmp_path):
         vuln = tmp_path / "vuln.py"
         vuln.write_text('eval("1+1")\n')

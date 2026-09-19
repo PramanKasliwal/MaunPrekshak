@@ -31,8 +31,58 @@ def _huggingface_token():
     return "hf_" + "".join(py_secrets.choice(chars) for _ in range(34))
 
 
+def _gitlab_pat():
+    chars = string.ascii_letters + string.digits + "_-"
+    return "glpat-" + "".join(py_secrets.choice(chars) for _ in range(25))
+
+
+def _github_fine_grained_pat():
+    chars = string.ascii_letters + string.digits + "_"
+    return "github_pat_" + "".join(py_secrets.choice(chars) for _ in range(82))
+
+
+def _discord_bot_token():
+    part1 = "M" + "".join(py_secrets.choice(string.ascii_letters + string.digits + "_-") for _ in range(23))
+    part2 = "".join(py_secrets.choice(string.ascii_letters + string.digits + "_-") for _ in range(6))
+    part3 = "".join(py_secrets.choice(string.ascii_letters + string.digits + "_-") for _ in range(27))
+    return f"{part1}.{part2}.{part3}"
+
+
+def _vault_token():
+    chars = string.ascii_letters + string.digits + "_-"
+    return "hvs." + "".join(py_secrets.choice(chars) for _ in range(26))
+
+
 class TestSecretPatterns:
     """Test that regex patterns correctly identify known secret formats."""
+
+    def test_detects_gitlab_pat(self, tmp_path):
+        py_file = tmp_path / "ci.py"
+        py_file.write_text(f'GITLAB_TOKEN = "{_gitlab_pat()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "GitLab Personal Access Token" in secret_types
+
+    def test_detects_github_fine_grained_pat(self, tmp_path):
+        py_file = tmp_path / "deploy.py"
+        py_file.write_text(f'GH_TOKEN = "{_github_fine_grained_pat()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "GitHub Fine-Grained PAT" in secret_types
+
+    def test_detects_discord_bot_token(self, tmp_path):
+        py_file = tmp_path / "bot.py"
+        py_file.write_text(f'DISCORD_TOKEN = "{_discord_bot_token()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "Discord Bot Token" in secret_types
+
+    def test_detects_vault_token(self, tmp_path):
+        py_file = tmp_path / "vault.py"
+        py_file.write_text(f'VAULT_TOKEN = "{_vault_token()}"\n')
+        findings = scan_secrets(str(tmp_path))
+        secret_types = [f.secret_type for f in findings]
+        assert "HashiCorp Vault Token" in secret_types
 
     def test_detects_openai_key(self, tmp_path):
         py_file = tmp_path / "ai.py"
