@@ -127,6 +127,16 @@ def scan_file_for_secrets(
                 if any(sp.search(line_content) for sp in SAFE_PATTERNS):
                     continue
 
+                # Check for inline suppression comments
+                if "#" in line_content:
+                    comment = line_content[line_content.find("#") :].lower()
+                    if any(k in comment for k in ("maunprekshak: ignore", "maunprekshak:ignore", "nosec", "ignore-secret")):
+                        continue
+                if "//" in line_content:
+                    comment = line_content[line_content.find("//") :].lower()
+                    if any(k in comment for k in ("maunprekshak: ignore", "maunprekshak:ignore", "nosec", "ignore-secret")):
+                        continue
+
                 line_flagged_values: Set[str] = set()
 
                 # 1. Regex pattern matches

@@ -4,6 +4,7 @@ Uses Python's `ast` module to walk source code and detect insecure patterns.
 """
 import ast
 import os
+import re
 from typing import List, Optional
 
 from maunprekshak.scanner.report import SASTFinding, Severity
@@ -425,6 +426,64 @@ EXCLUDE_DIRS = {
 }
 
 
+def is_suppressed(finding: SASTFinding, source_lines: List[str]) -> bool:
+    """
+    Check if a SAST finding is suppressed via inline or file-level comment.
+    Supported comments:
+      - # maunprekshak: disable-file or # maunprekshak: disable-file[MP001, MP004]
+      - # maunprekshak: ignore or # maunprekshak: ignore[MP001, MP004]
+      - # nosec or # nosec: MP001
+    """
+    # 1. File-level suppression
+    for line in source_lines[:25]:
+        line_clean = line.strip().lower()
+        if "maunprekshak: disable-file" in line_clean or "maunprekshak:disable-file" in line_clean:
+            match = re.search(r"disable-file(?:\[(.*?)\])?", line_clean)
+            if match:
+                rules_str = match.group(1)
+                if not rules_str:
+                    return True
+                rules = [r.strip().upper() for r in rules_str.split(",") if r.strip()]
+                if finding.check_id.upper() in rules:
+                    return True
+
+    # 2. Line-level suppression
+    target_indices = []
+    line_num = finding.line
+    if 1 <= line_num <= len(source_lines):
+        target_indices.append(line_num - 1)
+    if line_num - 2 >= 0 and line_num - 2 < len(source_lines):
+        target_indices.append(line_num - 2)
+
+    for idx in target_indices:
+        text = source_lines[idx].strip()
+        if "#" not in text:
+            continue
+        comment = text[text.find("#") :].lower()
+
+        if "maunprekshak: ignore" in comment or "maunprekshak:ignore" in comment:
+            match = re.search(r"ignore(?:\[(.*?)\])?", comment)
+            if match:
+                rules_str = match.group(1)
+                if not rules_str:
+                    return True
+                rules = [r.strip().upper() for r in rules_str.split(",") if r.strip()]
+                if finding.check_id.upper() in rules:
+                    return True
+
+        if "nosec" in comment:
+            match = re.search(r"nosec(?::\s*(.*?))?(?:\s|$)", comment)
+            if match:
+                rules_str = match.group(1)
+                if not rules_str:
+                    return True
+                rules = [r.strip().upper() for r in rules_str.split(",") if r.strip()]
+                if finding.check_id.upper() in rules:
+                    return True
+
+    return False
+
+
 def _scan_single_py_file(file_path: str) -> List[SASTFinding]:
     """Scan a single Python source file for AST security issues."""
     findings: List[SASTFinding] = []
@@ -436,7 +495,9 @@ def _scan_single_py_file(file_path: str) -> List[SASTFinding]:
         tree = ast.parse(source, filename=file_path)
         visitor = SecurityVisitor(file_path, source_lines)
         visitor.visit(tree)
-        findings.extend(visitor.findings)
+        for finding in visitor.findings:
+            if not is_suppressed(finding, source_lines):
+                findings.append(finding)
     except SyntaxError:
         pass  # Skip files with syntax errors
     except Exception:

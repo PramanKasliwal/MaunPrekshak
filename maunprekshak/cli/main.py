@@ -16,9 +16,12 @@ from maunprekshak.scanner.report import (
     to_markdown,
     to_pdf,
     to_sarif,
+    to_cyclonedx,
+    to_spdx,
     generate_ai_summary,
     aggregate,
 )
+from maunprekshak.scanner.fixer import apply_auto_fixes
 
 # Auto-load .env from the current directory or any parent directory
 load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
@@ -67,7 +70,7 @@ def get_git_diff_files(repo_path: str, ref: Optional[str] = None) -> List[str]:
 def scan(
     path: str = typer.Argument(".", help="Path to project or directory to scan"),
     only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast"),
-    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif"),
+    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx"),
     output_file: Optional[str] = typer.Option(None, help="Save output to this file path"),
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
@@ -76,6 +79,7 @@ def scan(
     staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
     diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
     baseline: Optional[str] = typer.Option(None, "--baseline", help="Path to baseline JSON report to suppress existing findings"),
+    fix: bool = typer.Option(False, "--fix", help="Automatically patch safe security anti-patterns (MP012, MP023, MP014)"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -163,6 +167,12 @@ def scan(
                 if output == "console":
                     console.print(f"[yellow]Warning: Baseline file not found at {baseline}. Running scan without baseline.[/yellow]")
 
+        if fix:
+            status.update("[bold green]Applying auto-fixes for safe anti-patterns...")
+            fixed_count, result = apply_auto_fixes(result)
+            if fixed_count > 0 and output == "console":
+                console.print(f"[bold green]✓ Auto-fixed {fixed_count} security anti-pattern(s)[/bold green]")
+
         if not effective_no_ai:
             status.update("[bold green]Generating AI summary...")
             result.ai_summary = generate_ai_summary(result)
@@ -185,6 +195,22 @@ def scan(
         out_str = to_sarif(result, project_root=path)
         if output_file:
             with open(output_file, "w") as f:
+                f.write(out_str)
+        else:
+            print(out_str)
+    elif output == "cyclonedx":
+        proj_name = Path(path).resolve().name or "project"
+        out_str = to_cyclonedx(result, project_name=proj_name)
+        if output_file:
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(out_str)
+        else:
+            print(out_str)
+    elif output == "spdx":
+        proj_name = Path(path).resolve().name or "project"
+        out_str = to_spdx(result, project_name=proj_name)
+        if output_file:
+            with open(output_file, "w", encoding="utf-8") as f:
                 f.write(out_str)
         else:
             print(out_str)
@@ -243,6 +269,143 @@ def auth_login():
     with open(os.path.expanduser("~/.maunprekshak.yaml"), "w") as f:
         f.write(f"api_key: {key}")
     console.print("[green]API Key saved.[/green]")
+
+
+hook_app = typer.Typer(help="Manage MaunPrekshak Git pre-commit hooks.")
+
+PRE_COMMIT_HOOK_SCRIPT = """#!/usr/bin/env bash
+# MaunPrekshak Git Pre-Commit Hook
+# Automatically installed by `maunprekshak hook install`
+
+echo "Running MaunPrekshak pre-commit scan on staged files..."
+
+# Locate maunprekshak binary
+if command -v maunprekshak >/dev/null 2>&1; then
+    MP_BIN="maunprekshak"
+elif command -v mp >/dev/null 2>&1; then
+    MP_BIN="mp"
+elif [ -n "$VIRTUAL_ENV" ] && [ -f "$VIRTUAL_ENV/bin/maunprekshak" ]; then
+    MP_BIN="$VIRTUAL_ENV/bin/maunprekshak"
+else
+    MP_BIN="python3 -m maunprekshak"
+fi
+
+$MP_BIN scan . --staged --ci --fail-on high --no-ai
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "❌ MaunPrekshak pre-commit check failed. Commit blocked."
+    echo "Fix vulnerabilities or commit with '--no-verify' to bypass."
+    exit $EXIT_CODE
+fi
+
+exit 0
+"""
+
+
+def _find_git_dir(start_path: str = ".") -> Optional[Path]:
+    curr = Path(start_path).resolve()
+    for p in [curr] + list(curr.parents):
+        git_path = p / ".git"
+        if git_path.exists():
+            return git_path
+    return None
+
+
+@hook_app.command(name="install")
+def hook_install(
+    path: str = typer.Option(".", "--path", "-p", help="Path to git repository or subdirectory")
+):
+    """Install MaunPrekshak as a native Git pre-commit hook."""
+    git_ref = _find_git_dir(path)
+    if not git_ref:
+        console.print(f"[bold red]Error: No .git repository found in {path} or any parent directory.[/bold red]")
+        raise typer.Exit(code=1)
+
+    hooks_dir: Optional[Path] = None
+    if git_ref.is_dir():
+        hooks_dir = git_ref / "hooks"
+    elif git_ref.is_file():
+        try:
+            content = git_ref.read_text().strip()
+            if content.startswith("gitdir:"):
+                actual_dir = Path(content.split("gitdir:", 1)[1].strip())
+                if not actual_dir.is_absolute():
+                    actual_dir = git_ref.parent / actual_dir
+                hooks_dir = actual_dir / "hooks"
+        except Exception:
+            pass
+
+    if not hooks_dir:
+        console.print(f"[bold red]Error: Could not determine git hooks directory for {git_ref}[/bold red]")
+        raise typer.Exit(code=1)
+
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_file = hooks_dir / "pre-commit"
+
+    if hook_file.exists():
+        existing_text = hook_file.read_text(encoding="utf-8")
+        if "MaunPrekshak Git Pre-Commit Hook" not in existing_text:
+            backup_file = hooks_dir / "pre-commit.maunprekshak.bak"
+            hook_file.rename(backup_file)
+            console.print(f"[yellow]Existing pre-commit hook backed up to {backup_file}[/yellow]")
+
+    hook_file.write_text(PRE_COMMIT_HOOK_SCRIPT, encoding="utf-8")
+    try:
+        hook_file.chmod(0o755)
+    except Exception:
+        pass
+
+    console.print(f"[bold green]✓ Successfully installed MaunPrekshak pre-commit hook at {hook_file}[/bold green]")
+
+
+@hook_app.command(name="uninstall")
+def hook_uninstall(
+    path: str = typer.Option(".", "--path", "-p", help="Path to git repository or subdirectory")
+):
+    """Uninstall MaunPrekshak Git pre-commit hook."""
+    git_ref = _find_git_dir(path)
+    if not git_ref:
+        console.print(f"[bold red]Error: No .git repository found in {path} or any parent directory.[/bold red]")
+        raise typer.Exit(code=1)
+
+    hooks_dir: Optional[Path] = None
+    if git_ref.is_dir():
+        hooks_dir = git_ref / "hooks"
+    elif git_ref.is_file():
+        try:
+            content = git_ref.read_text().strip()
+            if content.startswith("gitdir:"):
+                actual_dir = Path(content.split("gitdir:", 1)[1].strip())
+                if not actual_dir.is_absolute():
+                    actual_dir = git_ref.parent / actual_dir
+                hooks_dir = actual_dir / "hooks"
+        except Exception:
+            pass
+
+    if not hooks_dir:
+        console.print(f"[bold red]Error: Could not determine git hooks directory for {git_ref}[/bold red]")
+        raise typer.Exit(code=1)
+
+    hook_file = hooks_dir / "pre-commit"
+    if not hook_file.exists():
+        console.print(f"[yellow]No pre-commit hook found at {hook_file}.[/yellow]")
+        return
+
+    text = hook_file.read_text(encoding="utf-8")
+    if "MaunPrekshak Git Pre-Commit Hook" in text:
+        hook_file.unlink()
+        console.print(f"[bold green]✓ Removed MaunPrekshak pre-commit hook from {hook_file}[/bold green]")
+        backup_file = hooks_dir / "pre-commit.maunprekshak.bak"
+        if backup_file.exists():
+            backup_file.rename(hook_file)
+            console.print(f"[bold green]✓ Restored original pre-commit hook from {backup_file}[/bold green]")
+    else:
+        console.print(f"[yellow]The pre-commit hook at {hook_file} was not installed by MaunPrekshak. Leaving untouched.[/yellow]")
+
+
+app.add_typer(hook_app, name="hook")
 
 
 if __name__ == "__main__":

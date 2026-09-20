@@ -2,7 +2,7 @@
 
 > *"The Silent Observer. Nothing hides from it."*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI version](https://img.shields.io/pypi/v/maunprekshak.svg?color=green&logo=pypi&logoColor=white)](https://pypi.org/project/maunprekshak/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/maunprekshak?color=blue&logo=pypi&logoColor=white)](https://pypistats.org/packages/maunprekshak)
@@ -78,17 +78,52 @@ mp scan .
 mp scan . --no-ai
 ```
 
-### Export Results to SARIF, JSON, or Markdown
+### Export Results to SARIF, SBOM, JSON, or Markdown
 
 ```bash
 # Export standard OASIS SARIF 2.1.0 for GitHub Code Scanning
 mp scan ./my-project --output sarif --output-file results.sarif
+
+# Export OASIS CycloneDX 1.5 JSON SBOM
+mp scan ./my-project --output cyclonedx --output-file bom.cdx.json
+
+# Export Linux Foundation SPDX 2.3 JSON SBOM
+mp scan ./my-project --output spdx --output-file bom.spdx.json
 
 # Export as JSON for pipelines
 mp scan ./my-project --output json > report.json
 
 # Export formatted Markdown
 mp scan ./my-project --output markdown > SECURITY.md
+```
+
+### Safe Mechanical Auto-Fixing (`--fix`)
+
+Automatically patch safe, deterministic anti-patterns without breaking application logic:
+- `MP012`: `yaml.load()` -> `yaml.safe_load()`
+- `MP023`: `tar.extractall()` -> `tar.extractall(filter='data')` (prevents Zip Slip)
+- `MP014`: `tempfile.mktemp()` -> `tempfile.NamedTemporaryFile().name`
+
+```bash
+mp scan . --fix
+```
+
+### Inline Code Suppression
+
+Suppress specific false-positives or approved patterns directly in code comments:
+
+```python
+# Suppress all findings on this line:
+result = eval(user_input)  # maunprekshak: ignore
+# or Bandit / flake8 compatible:
+result = eval(user_input)  # nosec
+
+# Suppress specific rule ID:
+result = eval(user_input)  # maunprekshak: ignore[MP001]
+result = eval(user_input)  # nosec: MP001
+
+# Disable entire file for a rule at the top of the file:
+# maunprekshak: disable-file[MP001]
 ```
 
 ### CI/CD Mode (Exit with Non-Zero on Threshold Breach)
@@ -124,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.6.1
+        uses: PramanKasliwal/maunprekshak@v0.7.0
         with:
           fail-on: high
           output: sarif
@@ -139,14 +174,24 @@ jobs:
 
 ---
 
-## 🪝 Pre-Commit Hook
+## 🪝 Native Git Pre-Commit Hook (1-Command Install)
 
-Prevent secrets, leaked API keys, and AST flaws from ever reaching Git. Add to your `.pre-commit-config.yaml`:
+Install MaunPrekshak directly into your repository's `.git/hooks/pre-commit` with a single command — no external dependencies needed:
+
+```bash
+# Install native pre-commit hook (automatically scans staged files before every commit)
+mp hook install
+
+# Uninstall hook and restore any previous backup
+mp hook uninstall
+```
+
+Or using the standard `.pre-commit-config.yaml` framework:
 
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.6.1
+    rev: v0.7.0
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high"]
@@ -210,7 +255,7 @@ Top Findings:
 | :--- | :---: | :--- |
 | `path` | `.` | Directory or project path to scan |
 | `--only` | `all` | Restrict scan to: `deps`, `secrets`, or `sast` |
-| `--output` | `console` | Output format: `console`, `json`, `markdown`, `pdf`, `sarif` |
+| `--output` | `console` | Output format: `console`, `json`, `markdown`, `pdf`, `sarif`, `cyclonedx`, `spdx` |
 | `--output-file` | `stdout` | Write report directly to a file |
 | `--ci` | `false` | Compact machine-readable summary + exit code |
 | `--fail-on` | `critical` | Fail when any finding reaches `critical`, `high`, `medium`, or `low` |
@@ -219,6 +264,9 @@ Top Findings:
 | `--staged` | `false` | Scan only git staged files (instant pre-commit mode) |
 | `--diff` | `None` | Scan only files modified against a git ref (e.g. `HEAD~1`, `main`) |
 | `--baseline` | `None` | Path to baseline JSON report to suppress existing findings |
+| `--fix` | `false` | Automatically patch safe security anti-patterns (MP012, MP023, MP014) |
+| `mp hook install` | — | Install native Git pre-commit hook into `.git/hooks/pre-commit` |
+| `mp hook uninstall` | — | Uninstall native Git pre-commit hook and restore backups |
 
 ---
 
@@ -252,7 +300,7 @@ We take security vulnerabilities seriously. Please review our [SECURITY.md](SECU
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) for details.
+Distributed under the **Apache License 2.0**. See [LICENSE](LICENSE) for details.
 
 ---
 

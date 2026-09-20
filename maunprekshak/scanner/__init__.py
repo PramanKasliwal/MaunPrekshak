@@ -5,6 +5,7 @@ from maunprekshak.scanner.report import ScanResult, aggregate
 from maunprekshak.scanner.deps import scan_dependencies
 from maunprekshak.scanner.secrets import scan_secrets
 from maunprekshak.scanner.sast import scan_sast
+from maunprekshak.scanner.dockerfile import scan_dockerfiles
 
 
 async def scan_project_async(
@@ -14,7 +15,7 @@ async def scan_project_async(
     target_files: Optional[List[str]] = None,
 ) -> ScanResult:
     """
-    Asynchronously orchestrate scanning of dependencies, secrets, and SAST.
+    Asynchronously orchestrate scanning of dependencies, secrets, SAST, and Dockerfiles.
     Ideal for async servers (e.g. FastAPI).
     """
     deps = []
@@ -29,6 +30,10 @@ async def scan_project_async(
 
     if only is None or only == "sast":
         sast = scan_sast(path, exclude=exclude, target_files=target_files)
+
+    if only is None or only in ("sast", "dockerfile"):
+        docker_findings = scan_dockerfiles(path, exclude=exclude, target_files=target_files)
+        sast.extend(docker_findings)
 
     return aggregate(deps, secrets, sast)
 

@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maunprekshak"
-version = "0.6.1"
+version = "0.7.0"
 description = "The Silent Observer — Open-source Python security scanner for dependencies, secrets & insecure code"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Praman Kasliwal", email = "kasliwal.praman008@gmail.com" }]
 keywords = ["security", "python", "vulnerability", "scanner", "sast", "secrets", "cve", "osv"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

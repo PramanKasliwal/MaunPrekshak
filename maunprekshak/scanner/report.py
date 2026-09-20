@@ -4,6 +4,8 @@ All shared dataclasses, risk scoring, and output formatting live here.
 """
 import json
 import os
+import re
+import uuid
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional
 from enum import Enum
@@ -519,7 +521,7 @@ def to_sarif(scan_result: ScanResult, project_root: str = ".") -> str:
                 "tool": {
                     "driver": {
                         "name": "MaunPrekshak",
-                        "semanticVersion": "0.2.0",
+                        "semanticVersion": "0.7.0",
                         "informationUri": "https://github.com/PramanKasliwal/maunprekshak",
                         "rules": list(rules_dict.values()),
                     }
@@ -530,4 +532,132 @@ def to_sarif(scan_result: ScanResult, project_root: str = ".") -> str:
     }
 
     return json.dumps(sarif_data, indent=2)
+
+
+def to_cyclonedx(scan_result: ScanResult, project_name: str = "project") -> str:
+    """
+    Generate an OASIS CycloneDX 1.5 JSON Software Bill of Materials (SBOM).
+    Includes all identified dependencies, purls, and linked vulnerability alerts.
+    """
+    from datetime import datetime, timezone
+
+    components = []
+    vulnerabilities = []
+    seen_components = set()
+
+    for dep in scan_result.deps:
+        comp_key = (dep.package.lower(), dep.version)
+        if "/" in dep.package and not dep.package.startswith("@"):
+            purl = f"pkg:golang/{dep.package}@{dep.version}"
+        elif dep.package.startswith("@") or any(ext in dep.package.lower() for ext in ("lodash", "react", "vue", "axios")):
+            purl = f"pkg:npm/{dep.package}@{dep.version}"
+        elif any(ext in dep.package.lower() for ext in ("serde", "tokio", "rand", "syn")):
+            purl = f"pkg:cargo/{dep.package}@{dep.version}"
+        else:
+            purl = f"pkg:pypi/{dep.package}@{dep.version}"
+
+        bom_ref = f"{dep.package}@{dep.version}"
+
+        if comp_key not in seen_components:
+            seen_components.add(comp_key)
+            components.append({
+                "type": "library",
+                "bom-ref": bom_ref,
+                "name": dep.package,
+                "version": dep.version,
+                "purl": purl,
+            })
+
+        if dep.cve_id:
+            vulnerabilities.append({
+                "bom-ref": f"vuln-{dep.cve_id}-{dep.package}",
+                "id": dep.cve_id,
+                "source": {
+                    "name": "OSV",
+                    "url": f"https://osv.dev/vulnerability/{dep.cve_id}",
+                },
+                "ratings": [
+                    {
+                        "source": {"name": "OSV"},
+                        "score": dep.cvss_score,
+                        "severity": dep.severity.lower(),
+                        "method": "CVSSv3",
+                    }
+                ],
+                "description": dep.description,
+                "recommendation": f"Upgrade to {dep.fix_version}" if dep.fix_version else "Check upstream for patched release.",
+                "affects": [
+                    {
+                        "ref": bom_ref,
+                    }
+                ],
+            })
+
+    cdx_data = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "version": 1,
+        "metadata": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tools": [
+                {
+                    "vendor": "MaunPrekshak",
+                    "name": "maunprekshak",
+                    "version": "0.7.0",
+                }
+            ],
+            "component": {
+                "type": "application",
+                "name": project_name,
+            },
+        },
+        "components": components,
+        "vulnerabilities": vulnerabilities,
+    }
+    return json.dumps(cdx_data, indent=2)
+
+
+def to_spdx(scan_result: ScanResult, project_name: str = "project") -> str:
+    """
+    Generate a Linux Foundation SPDX 2.3 JSON Software Bill of Materials (SBOM).
+    """
+    from datetime import datetime, timezone
+
+    packages = []
+    seen = set()
+
+    for dep in scan_result.deps:
+        key = (dep.package.lower(), dep.version)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        clean_pkg = re.sub(r"[^a-zA-Z0-9.-]", "-", dep.package)
+        spdx_id = f"SPDXRef-Package-{clean_pkg}-{dep.version}"
+        packages.append({
+            "name": dep.package,
+            "SPDXID": spdx_id,
+            "versionInfo": dep.version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "homepage": f"https://osv.dev/vulnerability/{dep.cve_id}" if dep.cve_id else "NOASSERTION",
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "NOASSERTION",
+            "copyrightText": "NOASSERTION",
+        })
+
+    spdx_data = {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": project_name,
+        "documentNamespace": f"https://spdx.org/spdxdocs/{project_name}-{uuid.uuid4()}",
+        "creationInfo": {
+            "created": datetime.now(timezone.utc).isoformat(),
+            "creators": ["Tool: MaunPrekshak-0.7.0"],
+        },
+        "packages": packages,
+    }
+    return json.dumps(spdx_data, indent=2)
 

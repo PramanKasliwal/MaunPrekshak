@@ -4,6 +4,7 @@ Unit tests for OASIS SARIF 2.1.0 output formatting.
 import json
 import os
 import pytest
+from maunprekshak import __version__
 from maunprekshak.scanner.report import (
     ScanResult,
     SASTFinding,
@@ -25,7 +26,7 @@ def test_empty_scan_result_to_sarif():
     assert len(data["runs"]) == 1
     run = data["runs"][0]
     assert run["tool"]["driver"]["name"] == "MaunPrekshak"
-    assert run["tool"]["driver"]["semanticVersion"] == "0.2.0"
+    assert run["tool"]["driver"]["semanticVersion"] == __version__
     assert run["results"] == []
 
 
