@@ -74,12 +74,15 @@ def scan(
     output_file: Optional[str] = typer.Option(None, help="Save output to this file path"),
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
-    no_ai: bool = typer.Option(False, help="Skip Gemini AI summary generation"),
+    no_ai: bool = typer.Option(False, help="Skip AI summary generation"),
     exclude: Optional[str] = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
     staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
     diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
     baseline: Optional[str] = typer.Option(None, "--baseline", help="Path to baseline JSON report to suppress existing findings"),
     fix: bool = typer.Option(False, "--fix", help="Automatically patch safe security anti-patterns (MP012, MP023, MP014)"),
+    ai_provider: str = typer.Option("auto", "--ai-provider", help="AI provider: auto, gemini, openai, anthropic, ollama"),
+    ai_model: Optional[str] = typer.Option(None, "--ai-model", help="AI model name (e.g. gpt-4o-mini, claude-3-5-haiku-20241022, gemini-2.5-flash, llama3.2)"),
+    ai_base_url: Optional[str] = typer.Option(None, "--ai-base-url", help="Custom AI API base URL (e.g. http://localhost:11434/v1 or private gateway)"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -92,6 +95,9 @@ def scan(
 
     effective_fail_on = fail_on if fail_on is not None else cfg.fail_on
     effective_no_ai = no_ai or cfg.no_ai
+    effective_ai_provider = ai_provider if ai_provider != "auto" else cfg.ai_provider
+    effective_ai_model = ai_model if ai_model is not None else cfg.ai_model
+    effective_ai_base_url = ai_base_url if ai_base_url is not None else cfg.ai_base_url
 
     target_files: Optional[List[str]] = None
     if staged:
@@ -174,8 +180,14 @@ def scan(
                 console.print(f"[bold green]✓ Auto-fixed {fixed_count} security anti-pattern(s)[/bold green]")
 
         if not effective_no_ai:
-            status.update("[bold green]Generating AI summary...")
-            result.ai_summary = generate_ai_summary(result)
+            provider_label = f" ({effective_ai_provider})" if effective_ai_provider != "auto" else ""
+            status.update(f"[bold green]Generating AI summary{provider_label}...")
+            result.ai_summary = generate_ai_summary(
+                result,
+                provider=effective_ai_provider,
+                model=effective_ai_model,
+                base_url=effective_ai_base_url,
+            )
 
     if output == "json":
         out_str = to_json(result)

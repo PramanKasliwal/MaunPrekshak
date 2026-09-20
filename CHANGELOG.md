@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-20
+
+### Added
+- **Multi-Provider AI Remediation Engine**:
+  - Unified AI architecture supporting **Google Gemini**, **OpenAI**, **Anthropic Claude**, and **Ollama (local/offline LLMs)** with zero new dependencies (powered by built-in `httpx`).
+  - Automatic provider resolution based on environment variables (`GEMINI_API_KEY` -> `OPENAI_API_KEY` -> `ANTHROPIC_API_KEY` -> `OLLAMA_HOST`).
+  - CLI flags: `--ai-provider`, `--ai-model`, and `--ai-base-url` for fine-grained engine control.
+  - Configuration support via `[ai]` table in `.maunprekshak.toml` (`provider`, `model`, `base_url`).
+  - Support for custom OpenAI-compatible endpoints (vLLM, Groq, LM Studio, enterprise proxies).
+
 ## [0.7.0] - 2026-09-20
 
 ### Added

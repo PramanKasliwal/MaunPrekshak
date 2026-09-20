@@ -33,6 +33,9 @@ class ScannerConfig:
     fail_on: str = "critical"
     no_ai: bool = False
     ignore_rules: List[str] = field(default_factory=list)
+    ai_provider: str = "auto"
+    ai_model: Optional[str] = None
+    ai_base_url: Optional[str] = None
 
 
 DEFAULT_CONFIG_TEMPLATE = """# MaunPrekshak Configuration File (.maunprekshak.toml)
@@ -53,11 +56,22 @@ exclude = [
 # CI fail severity threshold: "critical", "high", "medium", or "low"
 fail_on = "high"
 
-# Disable Gemini AI remediation summaries (runs fully offline)
+# Disable AI remediation summaries (runs fully offline)
 no_ai = false
 
 # List of SAST check IDs to ignore (e.g. ["MP010"])
 ignore_rules = []
+
+[ai]
+# AI provider: "auto", "gemini", "openai", "anthropic", "ollama"
+provider = "auto"
+
+# Model name override (optional)
+# e.g. "gpt-4o-mini", "claude-3-5-haiku-20241022", "gemini-2.5-flash", "llama3.2"
+# model = ""
+
+# Custom API base URL (optional, e.g. "http://localhost:11434/v1" or private enterprise gateway)
+# base_url = ""
 """
 
 
@@ -87,12 +101,16 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                 with open(config_file, "rb") as f:
                     data = tomllib.load(f)
                 scanner_data = data.get("scanner", {})
+                ai_data = data.get("ai", {})
                 default_ex = ScannerConfig().exclude
                 return ScannerConfig(
                     exclude=scanner_data.get("exclude", default_ex),
                     fail_on=scanner_data.get("fail_on", "critical"),
                     no_ai=scanner_data.get("no_ai", False),
                     ignore_rules=scanner_data.get("ignore_rules", []),
+                    ai_provider=ai_data.get("provider", "auto"),
+                    ai_model=ai_data.get("model", None),
+                    ai_base_url=ai_data.get("base_url", None),
                 )
             except Exception:
                 pass
@@ -108,12 +126,16 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                 data = tomllib.load(f)
             tool_data = data.get("tool", {}).get("maunprekshak", {})
             if tool_data:
+                ai_data = tool_data.get("ai", {})
                 default_ex = ScannerConfig().exclude
                 return ScannerConfig(
                     exclude=tool_data.get("exclude", default_ex),
                     fail_on=tool_data.get("fail_on", "critical"),
                     no_ai=tool_data.get("no_ai", False),
                     ignore_rules=tool_data.get("ignore_rules", []),
+                    ai_provider=ai_data.get("provider", "auto"),
+                    ai_model=ai_data.get("model", None),
+                    ai_base_url=ai_data.get("base_url", None),
                 )
         except Exception:
             pass

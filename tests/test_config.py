@@ -68,6 +68,28 @@ ignore_rules = ["MP001"]
         assert cfg.ignore_rules == ["MP001"]
 
 
+def test_load_ai_config():
+    """Test loading [ai] section from .maunprekshak.toml."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / ".maunprekshak.toml"
+        config_path.write_text(
+            """
+[scanner]
+fail_on = "high"
+
+[ai]
+provider = "openai"
+model = "gpt-4o"
+base_url = "https://custom.ai.gateway/v1"
+"""
+        )
+
+        cfg = load_config(tmpdir)
+        assert cfg.ai_provider == "openai"
+        assert cfg.ai_model == "gpt-4o"
+        assert cfg.ai_base_url == "https://custom.ai.gateway/v1"
+
+
 def test_default_template_is_valid_toml():
     """Test that DEFAULT_CONFIG_TEMPLATE is syntactically valid TOML."""
     if tomllib is not None:

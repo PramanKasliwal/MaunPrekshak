@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional
 from enum import Enum
+from maunprekshak import __version__
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -148,73 +149,7 @@ def aggregate(
 
 # ─── AI Summary ───────────────────────────────────────────────────────────────
 
-def generate_ai_summary(scan_result: ScanResult) -> str:
-    """
-    Generate an AI-powered executive security summary using Gemini.
-    Gracefully skips if GEMINI_API_KEY is not set.
-    """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return "AI Summary skipped: set GEMINI_API_KEY to enable."
-
-    try:
-        import time
-        from google import genai  # google-genai package
-
-        client = genai.Client(api_key=api_key)
-
-        prompt = f"""You are a senior application security engineer.
-Analyze this Python project scan result and write a concise executive security summary.
-
-Scan Results:
-- Overall Risk: {scan_result.risk_score.level} (Score: {scan_result.risk_score.score})
-- Dependency vulnerabilities: {len(scan_result.deps)}
-- Exposed secrets/credentials: {len(scan_result.secrets)}
-- SAST findings: {len(scan_result.sast)}
-
-Top findings:
-{_format_top_findings(scan_result)}
-
-Write:
-1. A 2-sentence executive summary
-2. Top 3 most critical risks and why
-3. Prioritized remediation steps (numbered)
-Keep it under 300 words. Be direct and actionable."""
-
-        # Retry up to 3 times with exponential backoff for transient 503 errors
-        last_error = None
-        for attempt, wait in enumerate([0, 5, 10]):
-            try:
-                if wait:
-                    time.sleep(wait)
-                response = client.models.generate_content(
-                    model="gemini-3.7-flash",
-                    contents=prompt,
-                )
-                return response.text
-            except Exception as e:
-                last_error = e
-                err_str = str(e)
-                # Only retry on 503 / rate limit errors
-                if "503" not in err_str and "UNAVAILABLE" not in err_str and "429" not in err_str:
-                    break
-
-        return f"AI Summary unavailable (retried 3×): {last_error}"
-
-    except Exception as e:
-        return f"AI Summary unavailable: {str(e)}"
-
-
-def _format_top_findings(scan_result: ScanResult) -> str:
-    """Format top findings for the AI prompt."""
-    lines = []
-    for dep in scan_result.deps[:3]:
-        lines.append(f"  - DEP {dep.severity}: {dep.package}=={dep.version} ({dep.cve_id})")
-    for sec in scan_result.secrets[:3]:
-        lines.append(f"  - SECRET {sec.severity}: {sec.secret_type} in {os.path.basename(sec.file_path)}:{sec.line}")
-    for sast in scan_result.sast[:3]:
-        lines.append(f"  - SAST {sast.severity}: {sast.description} in {os.path.basename(sast.file_path)}:{sast.line}")
-    return "\n".join(lines) if lines else "  No findings."
+from maunprekshak.scanner.ai import generate_ai_summary
 
 
 # ─── Output Formatters ────────────────────────────────────────────────────────
@@ -521,7 +456,7 @@ def to_sarif(scan_result: ScanResult, project_root: str = ".") -> str:
                 "tool": {
                     "driver": {
                         "name": "MaunPrekshak",
-                        "semanticVersion": "0.7.0",
+                        "semanticVersion": __version__,
                         "informationUri": "https://github.com/PramanKasliwal/maunprekshak",
                         "rules": list(rules_dict.values()),
                     }
@@ -604,7 +539,7 @@ def to_cyclonedx(scan_result: ScanResult, project_name: str = "project") -> str:
                 {
                     "vendor": "MaunPrekshak",
                     "name": "maunprekshak",
-                    "version": "0.7.0",
+                    "version": __version__,
                 }
             ],
             "component": {
@@ -655,7 +590,7 @@ def to_spdx(scan_result: ScanResult, project_name: str = "project") -> str:
         "documentNamespace": f"https://spdx.org/spdxdocs/{project_name}-{uuid.uuid4()}",
         "creationInfo": {
             "created": datetime.now(timezone.utc).isoformat(),
-            "creators": ["Tool: MaunPrekshak-0.7.0"],
+            "creators": [f"Tool: MaunPrekshak-{__version__}"],
         },
         "packages": packages,
     }

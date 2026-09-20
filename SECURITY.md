@@ -6,9 +6,9 @@ We actively release security patches, dependency fixes, and vulnerability update
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 0.8.x   | :white_check_mark: |
 | 0.7.x   | :white_check_mark: |
-| 0.6.x   | :white_check_mark: |
-| < 0.6.0 | :x:                |
+| < 0.7.0 | :x:                |
 
 ---
 

@@ -159,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run MaunPrekshak Security Scan
-        uses: PramanKasliwal/maunprekshak@v0.7.0
+        uses: PramanKasliwal/maunprekshak@v0.8.0
         with:
           fail-on: high
           output: sarif
@@ -191,7 +191,7 @@ Or using the standard `.pre-commit-config.yaml` framework:
 ```yaml
 repos:
   - repo: https://github.com/PramanKasliwal/maunprekshak
-    rev: v0.7.0
+    rev: v0.8.0
     hooks:
       - id: maunprekshak
         args: ["--staged", "--fail-on", "high"]
@@ -265,21 +265,40 @@ Top Findings:
 | `--diff` | `None` | Scan only files modified against a git ref (e.g. `HEAD~1`, `main`) |
 | `--baseline` | `None` | Path to baseline JSON report to suppress existing findings |
 | `--fix` | `false` | Automatically patch safe security anti-patterns (MP012, MP023, MP014) |
+| `--ai-provider` | `auto` | AI provider: `auto`, `gemini`, `openai`, `anthropic`, `ollama` |
+| `--ai-model` | `default` | Model name override (e.g. `gpt-4o-mini`, `claude-3-5-haiku`, `llama3.2`) |
+| `--ai-base-url` | `default` | Custom API base URL (e.g. `http://localhost:11434/v1` or private gateway) |
 | `mp hook install` | — | Install native Git pre-commit hook into `.git/hooks/pre-commit` |
 | `mp hook uninstall` | — | Uninstall native Git pre-commit hook and restore backups |
 
 ---
 
-## 🤖 Bringing Your Own Gemini AI Key (Optional)
+## 🤖 Multi-Provider AI Remediation (Gemini, OpenAI, Anthropic, Ollama)
 
-If you'd like AI-generated remediation summaries, set your Gemini API key in your environment or a `.env` file:
+MaunPrekshak automatically crafts actionable executive security summaries and prioritized remediation plans. It auto-detects your preferred AI provider or allows explicit selection with **zero extra dependencies** (powered by built-in `httpx`):
 
 ```bash
-export GEMINI_API_KEY="AIzaSy..."
+# Auto-detects based on available environment key:
 mp scan .
-```
 
-Get a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey).
+# Google Gemini:
+export GEMINI_API_KEY="AIzaSy..."
+mp scan . --ai-provider gemini
+
+# OpenAI:
+export OPENAI_API_KEY="sk-..."
+mp scan . --ai-provider openai --ai-model gpt-4o-mini
+
+# Anthropic Claude:
+export ANTHROPIC_API_KEY="sk-ant-..."
+mp scan . --ai-provider anthropic --ai-model claude-3-5-haiku-20241022
+
+# 100% Offline / Air-Gapped via Local Ollama:
+mp scan . --ai-provider ollama --ai-model llama3.2
+
+# Custom enterprise gateway or vLLM:
+mp scan . --ai-provider openai --ai-base-url "http://localhost:11434/v1"
+```
 
 ---
 
