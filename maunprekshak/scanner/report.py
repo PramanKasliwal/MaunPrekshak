@@ -102,6 +102,16 @@ class ScanResult:
         all_findings = list(self.deps) + list(self.secrets) + list(self.sast)
         return sum(1 for f in all_findings if getattr(f, "severity", "") == Severity.HIGH.value)
 
+    @property
+    def medium_count(self) -> int:
+        all_findings = list(self.deps) + list(self.secrets) + list(self.sast)
+        return sum(1 for f in all_findings if getattr(f, "severity", "") == Severity.MEDIUM.value)
+
+    @property
+    def low_count(self) -> int:
+        all_findings = list(self.deps) + list(self.secrets) + list(self.sast)
+        return sum(1 for f in all_findings if getattr(f, "severity", "") == Severity.LOW.value)
+
 
 # ─── Aggregation & Scoring ────────────────────────────────────────────────────
 
@@ -595,4 +605,427 @@ def to_spdx(scan_result: ScanResult, project_name: str = "project") -> str:
         "packages": packages,
     }
     return json.dumps(spdx_data, indent=2)
+
+
+def to_html(scan_result: ScanResult, project_name: str = "project") -> str:
+    """
+    Generate an interactive, standalone single-file HTML security audit report.
+    100% offline and self-contained with zero external stylesheet or JavaScript dependencies.
+    """
+    import html
+    from datetime import datetime, timezone
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    risk_level = scan_result.risk_score.level if scan_result.risk_score else "LOW"
+    risk_score = scan_result.risk_score.score if scan_result.risk_score else 0
+
+    level_colors = {
+        "LOW": "#10b981",
+        "MEDIUM": "#eab308",
+        "HIGH": "#f97316",
+        "CRITICAL": "#ef4444",
+    }
+    risk_color = level_colors.get(risk_level.upper(), "#10b981")
+
+    # Metrics
+    total = scan_result.total_findings
+    crit_count = scan_result.critical_count
+    high_count = scan_result.high_count
+    med_count = scan_result.medium_count
+    low_count = scan_result.low_count
+    deps_count = len(scan_result.deps)
+    secrets_count = len(scan_result.secrets)
+    sast_count = len(scan_result.sast)
+
+    # Build findings list
+    all_findings_html = []
+
+    # 1. Dependency Findings
+    for dep in scan_result.deps:
+        sev = dep.severity.upper()
+        c = level_colors.get(sev, "#94a3b8")
+        title = f"{html.escape(dep.package)} {html.escape(dep.version)} — {html.escape(dep.cve_id)}"
+        fix_html = f"<div class='fix-box'><strong>Recommended Fix:</strong> Upgrade to &ge; {html.escape(dep.fix_version)}</div>" if dep.fix_version else ""
+        card = f"""
+        <div class="finding-card" data-severity="{sev.lower()}" data-category="deps" style="border-left-color: {c};">
+            <div class="card-header">
+                <span class="badge" style="background-color: {c};">{sev}</span>
+                <span class="badge cat-badge">Dependency</span>
+                <span class="badge id-badge">{html.escape(dep.cve_id)}</span>
+                <span class="finding-title">{title}</span>
+            </div>
+            <div class="card-body">
+                <p class="description">{html.escape(dep.description)}</p>
+                <div class="location-box"><code>Package: {html.escape(dep.package)} | Installed Version: {html.escape(dep.version)} | CVSS: {dep.cvss_score}</code></div>
+                {fix_html}
+            </div>
+        </div>
+        """
+        all_findings_html.append(card)
+
+    # 2. Secret Findings
+    for sec in scan_result.secrets:
+        sev = sec.severity.upper()
+        c = level_colors.get(sev, "#94a3b8")
+        title = f"{html.escape(sec.secret_type)} in {html.escape(sec.file_path)}"
+        card = f"""
+        <div class="finding-card" data-severity="{sev.lower()}" data-category="secrets" style="border-left-color: {c};">
+            <div class="card-header">
+                <span class="badge" style="background-color: {c};">{sev}</span>
+                <span class="badge cat-badge">Secret</span>
+                <span class="finding-title">{title}</span>
+            </div>
+            <div class="card-body">
+                <div class="location-box"><code>{html.escape(sec.file_path)}:{sec.line}</code></div>
+                <div class="snippet-box"><code>Masked Secret: {html.escape(sec.masked_value)}</code></div>
+                <div class="fix-box"><strong>Remediation:</strong> Immediately revoke this credential, rotate it with the provider, and store it in an environment secret manager.</div>
+            </div>
+        </div>
+        """
+        all_findings_html.append(card)
+
+    # 3. SAST / Container / CI Findings
+    for s in scan_result.sast:
+        sev = s.severity.upper()
+        c = level_colors.get(sev, "#94a3b8")
+        title = f"{html.escape(s.check_id)}: {html.escape(s.description[:80])}"
+        snippet_html = f"<div class='snippet-box'><code>{html.escape(s.code_snippet)}</code></div>" if s.code_snippet else ""
+        card = f"""
+        <div class="finding-card" data-severity="{sev.lower()}" data-category="sast" style="border-left-color: {c};">
+            <div class="card-header">
+                <span class="badge" style="background-color: {c};">{sev}</span>
+                <span class="badge cat-badge">SAST</span>
+                <span class="badge id-badge">{html.escape(s.check_id)}</span>
+                <span class="finding-title">{title}</span>
+            </div>
+            <div class="card-body">
+                <div class="location-box"><code>{html.escape(s.file_path)}:{s.line}:{s.col}</code></div>
+                <p class="description">{html.escape(s.description)}</p>
+                {snippet_html}
+                <div class="fix-box"><strong>Recommendation:</strong> {html.escape(s.recommendation)}</div>
+            </div>
+        </div>
+        """
+        all_findings_html.append(card)
+
+    findings_content = "\n".join(all_findings_html) if all_findings_html else "<div class='no-findings'>✓ Zero vulnerabilities detected. Clean security posture!</div>"
+
+    ai_section = ""
+    if scan_result.ai_summary:
+        ai_section = f"""
+        <div class="ai-box">
+            <h3>🤖 AI Security Executive Summary</h3>
+            <div class="ai-content">{html.escape(scan_result.ai_summary)}</div>
+        </div>
+        """
+
+    html_template = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MaunPrekshak Security Audit Report — {html.escape(project_name)}</title>
+    <style>
+        :root {{
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --border-color: #334155;
+            --accent: #38bdf8;
+            --crit: #ef4444;
+            --high: #f97316;
+            --med: #eab308;
+            --low: #10b981;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 2rem;
+            line-height: 1.5;
+        }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1.5rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }}
+        .brand h1 {{ font-size: 1.75rem; font-weight: 700; color: #fff; }}
+        .brand p {{ color: var(--text-secondary); font-size: 0.875rem; }}
+        .risk-badge {{
+            background-color: var(--bg-secondary);
+            border: 2px solid {risk_color};
+            border-radius: 8px;
+            padding: 0.75rem 1.25rem;
+            text-align: right;
+        }}
+        .risk-badge .level {{ font-size: 1.25rem; font-weight: bold; color: {risk_color}; }}
+        .risk-badge .score {{ font-size: 0.875rem; color: var(--text-secondary); }}
+        
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }}
+        .metric-card {{
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }}
+        .metric-card .val {{ font-size: 1.75rem; font-weight: bold; }}
+        .metric-card .lbl {{ font-size: 0.75rem; text-transform: uppercase; color: var(--text-secondary); margin-top: 0.25rem; }}
+
+        .controls {{
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }}
+        .search-box {{
+            flex: 1;
+            min-width: 250px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 0.875rem;
+        }}
+        .btn-group {{ display: flex; gap: 0.5rem; flex-wrap: wrap; }}
+        .filter-btn {{
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }}
+        .filter-btn.active {{
+            background: var(--accent);
+            color: #0f172a;
+            font-weight: bold;
+            border-color: var(--accent);
+        }}
+
+        .findings-list {{ display: flex; flex-direction: column; gap: 1rem; }}
+        .finding-card {{
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-left-width: 5px;
+            border-radius: 6px;
+            padding: 1.25rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }}
+        .card-header {{ display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }}
+        .badge {{
+            font-size: 0.7rem;
+            font-weight: bold;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            color: #fff;
+            text-transform: uppercase;
+        }}
+        .cat-badge {{ background: #475569; }}
+        .id-badge {{ background: #334155; color: var(--accent); font-family: monospace; }}
+        .finding-title {{ font-size: 1rem; font-weight: 600; color: #f1f5f9; }}
+        .card-body {{ font-size: 0.875rem; color: #cbd5e1; }}
+        .location-box {{ margin: 0.5rem 0; font-family: monospace; font-size: 0.8rem; color: #94a3b8; }}
+        .snippet-box {{
+            background: #090d16;
+            border: 1px solid #1e293b;
+            padding: 0.6rem;
+            border-radius: 4px;
+            margin: 0.5rem 0;
+            overflow-x: auto;
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #38bdf8;
+        }}
+        .fix-box {{
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #6ee7b7;
+            padding: 0.6rem 0.8rem;
+            border-radius: 4px;
+            margin-top: 0.75rem;
+            font-size: 0.8rem;
+        }}
+        .no-findings {{
+            text-align: center;
+            padding: 3rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            color: #10b981;
+            font-size: 1.25rem;
+            font-weight: 600;
+        }}
+        .ai-box {{
+            background: #1e1b4b;
+            border: 1px solid #4338ca;
+            border-radius: 8px;
+            padding: 1.25rem;
+            margin-bottom: 2rem;
+        }}
+        .ai-box h3 {{ color: #a5b4fc; font-size: 1.1rem; margin-bottom: 0.5rem; }}
+        .ai-content {{ white-space: pre-wrap; font-size: 0.875rem; color: #e0e7ff; }}
+        footer {{
+            margin-top: 3rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+            padding-top: 1.5rem;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <h1>मौन प्रेक्षक — MaunPrekshak</h1>
+                <p>The Silent Observer &bull; Audit Report for <strong>{html.escape(project_name)}</strong></p>
+                <p style="font-size: 0.75rem; margin-top: 0.25rem;">Generated on {timestamp} &bull; Engine v{__version__}</p>
+            </div>
+            <div class="risk-badge">
+                <div class="level">{risk_level} RISK</div>
+                <div class="score">Composite Score: {risk_score}</div>
+            </div>
+        </header>
+
+        {ai_section}
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="val" style="color: #fff;">{total}</div>
+                <div class="lbl">Total Issues</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--crit);">{crit_count}</div>
+                <div class="lbl">Critical</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--high);">{high_count}</div>
+                <div class="lbl">High</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--med);">{med_count}</div>
+                <div class="lbl">Medium</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--low);">{low_count}</div>
+                <div class="lbl">Low</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--accent);">{secrets_count}</div>
+                <div class="lbl">Secrets</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--accent);">{deps_count}</div>
+                <div class="lbl">Dependencies</div>
+            </div>
+            <div class="metric-card">
+                <div class="val" style="color: var(--accent);">{sast_count}</div>
+                <div class="lbl">SAST / CI</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <input type="text" id="searchInput" class="search-box" placeholder="Search by rule, package, file, or keyword...">
+            <div class="btn-group" id="sevFilters">
+                <button class="filter-btn active" data-sev="all">All</button>
+                <button class="filter-btn" data-sev="critical">Critical</button>
+                <button class="filter-btn" data-sev="high">High</button>
+                <button class="filter-btn" data-sev="medium">Medium</button>
+                <button class="filter-btn" data-sev="low">Low</button>
+            </div>
+            <div class="btn-group" id="catFilters">
+                <button class="filter-btn active" data-cat="all">All Types</button>
+                <button class="filter-btn" data-cat="secrets">Secrets</button>
+                <button class="filter-btn" data-cat="deps">Dependencies</button>
+                <button class="filter-btn" data-cat="sast">SAST</button>
+            </div>
+        </div>
+
+        <div class="findings-list" id="findingsList">
+            {findings_content}
+        </div>
+
+        <footer>
+            MaunPrekshak Core &bull; Open-source Local-First Security Scanner &bull;
+            <a href="https://github.com/PramanKasliwal/maunprekshak" style="color: var(--accent);" target="_blank">GitHub Repository</a>
+        </footer>
+    </div>
+
+    <script>
+        (function() {{
+            const searchInput = document.getElementById('searchInput');
+            const sevButtons = document.querySelectorAll('#sevFilters .filter-btn');
+            const catButtons = document.querySelectorAll('#catFilters .filter-btn');
+            const cards = document.querySelectorAll('.finding-card');
+
+            let currentSev = 'all';
+            let currentCat = 'all';
+            let searchQuery = '';
+
+            function updateCards() {{
+                cards.forEach(card => {{
+                    const sev = card.getAttribute('data-severity');
+                    const cat = card.getAttribute('data-category');
+                    const text = card.textContent.toLowerCase();
+
+                    const matchSev = currentSev === 'all' || sev === currentSev;
+                    const matchCat = currentCat === 'all' || cat === currentCat;
+                    const matchSearch = !searchQuery || text.includes(searchQuery);
+
+                    if (matchSev && matchCat && matchSearch) {{
+                        card.style.display = 'block';
+                    }} else {{
+                        card.style.display = 'none';
+                    }}
+                }});
+            }}
+
+            searchInput.addEventListener('input', (e) => {{
+                searchQuery = e.target.value.toLowerCase().trim();
+                updateCards();
+            }});
+
+            sevButtons.forEach(btn => {{
+                btn.addEventListener('click', () => {{
+                    sevButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentSev = btn.getAttribute('data-sev');
+                    updateCards();
+                }});
+            }});
+
+            catButtons.forEach(btn => {{
+                btn.addEventListener('click', () => {{
+                    catButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentCat = btn.getAttribute('data-cat');
+                    updateCards();
+                }});
+            }});
+        }})();
+    </script>
+</body>
+</html>
+"""
+    return html_template
+
 

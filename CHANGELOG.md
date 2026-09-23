@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-23
+
+### Added
+- **Custom Rule Engine**:
+  - Define domain-specific secret regexes and SAST rules via `.maunprekshak-rules.yaml`, `.maunprekshak.toml`, or CLI flag `--rules-file`.
+  - Supports custom secret patterns with configurable severity and masking.
+  - Supports custom AST checks for banned function calls, banned module imports, and regex anti-patterns.
+- **Git Commit History Secrets Scanner**:
+  - Deep-scan past git commits for leaked tokens and credentials that were committed and subsequently removed (`--history`, `--commits <N>`).
+  - Differentiates commit additions with commit SHA and file attribution.
+- **Interactive Standalone HTML Security Audit Report**:
+  - Single-file, 100% offline self-contained HTML audit dashboard via `--output html` / `--output-file <file.html>`.
+  - Real-time client-side search, severity badges, risk breakdown metrics, dark-mode styling, and zero external CDN/script dependencies.
+- **GitHub Actions CI/CD Security Scanner**:
+  - `GHA001`: Script injection via untrusted GitHub event contexts in `run:` step (`${{ github.event.* }}`).
+  - `GHA002`: Unpinned third-party actions using mutable branch tags (`@main`, `@master`).
+  - `GHA003`: Dangerous `pull_request_target` trigger with checkout of untrusted PR head.
+  - `GHA004`: Overly permissive workflow permissions (`permissions: write-all`).
+  - `GHA005`: Plaintext secrets printed to workflow logs (`echo ... ${{ secrets.* }}`).
+- **Community Code of Conduct**:
+  - Contributor Covenant v2.1 added to repository (`CODE_OF_CONDUCT.md`).
+
 ## [0.8.0] - 2026-09-20
 
 ### Added

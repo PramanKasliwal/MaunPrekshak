@@ -18,6 +18,7 @@ from maunprekshak.scanner.report import (
     to_sarif,
     to_cyclonedx,
     to_spdx,
+    to_html,
     generate_ai_summary,
     aggregate,
 )
@@ -70,7 +71,7 @@ def get_git_diff_files(repo_path: str, ref: Optional[str] = None) -> List[str]:
 def scan(
     path: str = typer.Argument(".", help="Path to project or directory to scan"),
     only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast"),
-    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx"),
+    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx, html"),
     output_file: Optional[str] = typer.Option(None, help="Save output to this file path"),
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
@@ -83,6 +84,9 @@ def scan(
     ai_provider: str = typer.Option("auto", "--ai-provider", help="AI provider: auto, gemini, openai, anthropic, ollama"),
     ai_model: Optional[str] = typer.Option(None, "--ai-model", help="AI model name (e.g. gpt-4o-mini, claude-3-5-haiku-20241022, gemini-2.5-flash, llama3.2)"),
     ai_base_url: Optional[str] = typer.Option(None, "--ai-base-url", help="Custom AI API base URL (e.g. http://localhost:11434/v1 or private gateway)"),
+    rules_file: Optional[str] = typer.Option(None, "--rules-file", help="Path to custom rules file (.maunprekshak-rules.yaml)"),
+    history: bool = typer.Option(False, "--history", help="Scan git commit history for leaked credentials"),
+    commits: Optional[int] = typer.Option(None, "--commits", help="Maximum number of historical commits to scan (default: 50)"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -98,6 +102,9 @@ def scan(
     effective_ai_provider = ai_provider if ai_provider != "auto" else cfg.ai_provider
     effective_ai_model = ai_model if ai_model is not None else cfg.ai_model
     effective_ai_base_url = ai_base_url if ai_base_url is not None else cfg.ai_base_url
+    effective_rules_file = rules_file or cfg.rules_file
+    effective_history = history or cfg.scan_history
+    effective_commits = commits if commits is not None else cfg.commits
 
     target_files: Optional[List[str]] = None
     if staged:
@@ -119,7 +126,15 @@ def scan(
             console.print(f"[bold cyan]Targeting {len(target_files)} modified file(s)...[/bold cyan]")
 
     with console.status("[bold green]Scanning project...") as status:
-        result = scan_project(path, exclude=exclude_list, only=only, target_files=target_files)
+        result = scan_project(
+            path,
+            exclude=exclude_list,
+            only=only,
+            target_files=target_files,
+            custom_rules_path=effective_rules_file,
+            scan_history=effective_history,
+            max_commits=effective_commits,
+        )
 
         # Apply rule exclusions from config if specified
         if cfg.ignore_rules:
@@ -224,6 +239,15 @@ def scan(
         if output_file:
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(out_str)
+        else:
+            print(out_str)
+    elif output == "html":
+        proj_name = Path(path).resolve().name or "project"
+        out_str = to_html(result, project_name=proj_name)
+        if output_file:
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(out_str)
+            console.print(f"[bold green]Saved interactive HTML report to {output_file}[/bold green]")
         else:
             print(out_str)
     elif output == "pdf" and output_file:

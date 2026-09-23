@@ -16,11 +16,14 @@
 
 - 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) across Python (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`), JavaScript/Node.js (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `package.json`), Go modules (`go.sum`, `go.mod`), and Rust crates (`Cargo.lock`, `Cargo.toml`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
 - 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors (including OpenAI `sk-proj-`, Anthropic `sk-ant-`, HuggingFace `hf_`, GitLab `glpat-`, GitHub Fine-Grained PAT `github_pat_`, Discord, HashiCorp Vault, AWS, Stripe) PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
-- 🛡️ **Static Code Analysis (SAST)**: 30 AST security rules (MP001–MP030) covering code execution, SQL injection, disabled SSL/TLS verification, wildcard network binding (`0.0.0.0`), insecure `/tmp` file creation, unsafe deserialization, paramiko AutoAddPolicy SSH MitM, unverified JWT decoding, world-writable chmod permissions, legacy XML XXE parsers, tarfile Zip Slip (CVE-2007-4559), urllib SSRF, ECB cipher modes, dill bytecode execution, Jinja2/Mako SSTI, pandas.read_pickle code execution, missing secure cookie flags, and hardcoded cryptographic IV/salt.
+- 📜 **Git Commit History Secrets Scanner**: Deep-scan historical git commits with `--history` and `--commits <N>` to uncover leaked credentials that were committed and later "deleted" in git log.
+- 🛠️ **Custom Rule Engine**: Extend the scanner with proprietary secret patterns and custom SAST rules via `.maunprekshak-rules.yaml` or `--rules-file` without modifying core code.
+- 🛡️ **Static Code & CI/CD Analysis (SAST)**: 30 Python AST rules (MP001–MP030), Dockerfile container rules (DF001–DF006), and GitHub Actions workflow security checks (GHA001–GHA005).
+- 📊 **Interactive Standalone HTML Report**: Generate a 100% offline, single-file interactive HTML dashboard with search, filtering, and risk gauges via `--output html`.
 - ⚡ **Git Staged, Diff & Baseline Scanning**: Fast pre-commit mode via `--staged`, diff checks via `--diff`, and legacy debt suppression via `--baseline`.
-- 🎨 **Rich Terminal & SARIF Export**: Formatted console output with risk gauges, and standard OASIS SARIF 2.1.0, JSON, or Markdown export.
+- 🎨 **Rich Terminal & Multi-Format Export**: Formatted console output, and standard OASIS SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3, HTML, JSON, or Markdown export.
 - 🔒 **100% Privacy & Local-First**: Scans run entirely on your local CPU. Your source code never leaves your machine.
-- 🤖 **Optional AI Remediation**: Plug in your Google Gemini API key for instant root-cause analysis and remediation steps.
+- 🤖 **Multi-Provider AI Remediation**: Plug in Google Gemini, OpenAI, Anthropic Claude, or local offline Ollama for root-cause analysis and remediation steps.
 
 ---
 
@@ -78,9 +81,12 @@ mp scan .
 mp scan . --no-ai
 ```
 
-### Export Results to SARIF, SBOM, JSON, or Markdown
+### Export Results to HTML, SARIF, SBOM, JSON, or Markdown
 
 ```bash
+# Export interactive standalone single-file HTML audit report (100% offline, zero CDN dependencies)
+mp scan ./my-project --output html --output-file audit.html
+
 # Export standard OASIS SARIF 2.1.0 for GitHub Code Scanning
 mp scan ./my-project --output sarif --output-file results.sarif
 
@@ -95,6 +101,44 @@ mp scan ./my-project --output json > report.json
 
 # Export formatted Markdown
 mp scan ./my-project --output markdown > SECURITY.md
+```
+
+### 📜 Git Commit History Secrets Scanning (`--history`)
+
+Detect credentials and tokens that were previously committed and subsequently deleted in git history:
+
+```bash
+# Scan git history for leaked credentials (default: last 50 commits)
+mp scan . --history
+
+# Deep-scan specific commit depth
+mp scan . --history --commits 100
+```
+
+### 🛠️ Custom Rule Engine (`--rules-file`)
+
+Define organization-specific secret patterns or custom SAST banned functions via `.maunprekshak-rules.yaml`:
+
+```yaml
+custom_rules:
+  secrets:
+    - id: "ACME-001"
+      name: "Acme Corp Token"
+      regex: "acme_secret_[0-9a-f]{32}"
+      severity: "high"
+  sast:
+    - id: "ACME-002"
+      name: "Banned Legacy Function"
+      severity: "critical"
+      description: "myapp.legacy_eval is unsafe and deprecated."
+      recommendation: "Use secure parser module instead."
+      banned_calls: ["myapp.legacy_eval", "os.system"]
+      banned_imports: ["telnetlib"]
+```
+
+```bash
+# Scan using explicit custom rules file (or auto-discovered .maunprekshak-rules.yaml)
+mp scan . --rules-file .maunprekshak-rules.yaml
 ```
 
 ### Safe Mechanical Auto-Fixing (`--fix`)
@@ -255,7 +299,7 @@ Top Findings:
 | :--- | :---: | :--- |
 | `path` | `.` | Directory or project path to scan |
 | `--only` | `all` | Restrict scan to: `deps`, `secrets`, or `sast` |
-| `--output` | `console` | Output format: `console`, `json`, `markdown`, `pdf`, `sarif`, `cyclonedx`, `spdx` |
+| `--output` | `console` | Output format: `console`, `json`, `markdown`, `pdf`, `sarif`, `cyclonedx`, `spdx`, `html` |
 | `--output-file` | `stdout` | Write report directly to a file |
 | `--ci` | `false` | Compact machine-readable summary + exit code |
 | `--fail-on` | `critical` | Fail when any finding reaches `critical`, `high`, `medium`, or `low` |
@@ -265,11 +309,32 @@ Top Findings:
 | `--diff` | `None` | Scan only files modified against a git ref (e.g. `HEAD~1`, `main`) |
 | `--baseline` | `None` | Path to baseline JSON report to suppress existing findings |
 | `--fix` | `false` | Automatically patch safe security anti-patterns (MP012, MP023, MP014) |
+| `--rules-file` | `None` | Path to custom rules YAML/TOML file (`.maunprekshak-rules.yaml`) |
+| `--history` | `false` | Deep-scan git commit history for leaked credentials |
+| `--commits` | `50` | Maximum number of historical commits to inspect |
 | `--ai-provider` | `auto` | AI provider: `auto`, `gemini`, `openai`, `anthropic`, `ollama` |
 | `--ai-model` | `default` | Model name override (e.g. `gpt-4o-mini`, `claude-3-5-haiku`, `llama3.2`) |
 | `--ai-base-url` | `default` | Custom API base URL (e.g. `http://localhost:11434/v1` or private gateway) |
 | `mp hook install` | — | Install native Git pre-commit hook into `.git/hooks/pre-commit` |
 | `mp hook uninstall` | — | Uninstall native Git pre-commit hook and restore backups |
+
+---
+
+## 🛡️ CI/CD & Container Rules Reference
+
+| Check ID | Target | Severity | Description |
+| :--- | :--- | :---: | :--- |
+| **GHA001** | GitHub Actions | HIGH | Script injection via untrusted context (`${{ github.event.* }}`) |
+| **GHA002** | GitHub Actions | MEDIUM | Unpinned third-party action using mutable branch tag |
+| **GHA003** | GitHub Actions | CRITICAL | Dangerous `pull_request_target` trigger with checkout of untrusted PR head |
+| **GHA004** | GitHub Actions | HIGH | Overly permissive permissions (`permissions: write-all`) |
+| **GHA005** | GitHub Actions | HIGH | Plaintext secrets output to console logs (`echo ${{ secrets.* }}`) |
+| **DF001** | Dockerfile | HIGH | Container running as root user (missing `USER` instruction) |
+| **DF002** | Dockerfile | MEDIUM | Unpinned base image tag (`:latest` or missing tag) |
+| **DF003** | Dockerfile | LOW | Uncleaned package manager cache lists |
+| **DF004** | Dockerfile | HIGH | Sensitive remote administration port exposed (`22`, `23`, `3389`) |
+| **DF005** | Dockerfile | HIGH | Untrusted shell download execution (`curl` / `wget` piped to `sh`) |
+| **DF006** | Dockerfile | MEDIUM | Insecure archive extraction using `ADD` instead of `COPY` |
 
 ---
 
@@ -302,12 +367,12 @@ mp scan . --ai-provider openai --ai-base-url "http://localhost:11434/v1"
 
 ---
 
-## 🤝 Contributing
+## 🤝 Contributing & Community
 
-We welcome community contributions! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+We welcome community contributions! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) and our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before participating.
 
 - Found a bug or missing a secret pattern? [Open an Issue](https://github.com/PramanKasliwal/maunprekshak/issues).
-- Want to contribute a new SAST check? PRs are warmly welcomed!
+- Want to contribute a new SAST check or rule? PRs are warmly welcomed!
 
 ---
  

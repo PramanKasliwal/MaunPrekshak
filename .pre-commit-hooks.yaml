@@ -12,3 +12,11 @@
   entry: mp scan . --staged --only secrets --ci --fail-on high --no-ai
   language: python
   pass_filenames: false
+
+- id: maunprekshak-history
+  name: MaunPrekshak Git History Secrets Scanner
+  description: Scans recent git commit history for leaked credentials and tokens
+  entry: mp scan . --history --commits 25 --only secrets --ci --fail-on high --no-ai
+  language: python
+  pass_filenames: false
+

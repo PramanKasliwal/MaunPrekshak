@@ -36,6 +36,9 @@ class ScannerConfig:
     ai_provider: str = "auto"
     ai_model: Optional[str] = None
     ai_base_url: Optional[str] = None
+    rules_file: Optional[str] = None
+    scan_history: bool = False
+    commits: int = 50
 
 
 DEFAULT_CONFIG_TEMPLATE = """# MaunPrekshak Configuration File (.maunprekshak.toml)
@@ -61,6 +64,13 @@ no_ai = false
 
 # List of SAST check IDs to ignore (e.g. ["MP010"])
 ignore_rules = []
+
+# Optional custom rules file (.maunprekshak-rules.yaml)
+# rules_file = ".maunprekshak-rules.yaml"
+
+# Enable git commit history secrets scanning
+scan_history = false
+commits = 50
 
 [ai]
 # AI provider: "auto", "gemini", "openai", "anthropic", "ollama"
@@ -111,6 +121,9 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                     ai_provider=ai_data.get("provider", "auto"),
                     ai_model=ai_data.get("model", None),
                     ai_base_url=ai_data.get("base_url", None),
+                    rules_file=scanner_data.get("rules_file", None),
+                    scan_history=scanner_data.get("scan_history", False),
+                    commits=scanner_data.get("commits", 50),
                 )
             except Exception:
                 pass
@@ -136,6 +149,9 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                     ai_provider=ai_data.get("provider", "auto"),
                     ai_model=ai_data.get("model", None),
                     ai_base_url=ai_data.get("base_url", None),
+                    rules_file=tool_data.get("rules_file", None),
+                    scan_history=tool_data.get("scan_history", False),
+                    commits=tool_data.get("commits", 50),
                 )
         except Exception:
             pass
