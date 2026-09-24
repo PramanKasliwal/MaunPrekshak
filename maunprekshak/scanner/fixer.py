@@ -120,3 +120,76 @@ def apply_auto_fixes(scan_result: ScanResult) -> Tuple[int, ScanResult]:
         scan_result.risk_score = recalculated.risk_score
 
     return total_fixed, scan_result
+
+
+def fix_requirements_txt(req_file_path: str, dep_findings: list) -> int:
+    """
+    Automatically patch a requirements.txt file to upgrade vulnerable
+    pinned dependencies to their minimum safe fix version from OSV findings.
+
+    Args:
+        req_file_path: Absolute path to requirements.txt file.
+        dep_findings:  List of DepVulnerability objects with a non-empty fix_version.
+
+    Returns:
+        Number of dependency entries successfully patched.
+    """
+    if not os.path.isfile(req_file_path):
+        return 0
+
+    fixable = {
+        dep.package.lower(): dep.fix_version
+        for dep in dep_findings
+        if dep.fix_version and dep.fix_version not in ("", "N/A", "unknown")
+    }
+    if not fixable:
+        return 0
+
+    try:
+        with open(req_file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return 0
+
+    patched = 0
+    new_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        # Skip comments and blank lines
+        if not stripped or stripped.startswith("#"):
+            new_lines.append(line)
+            continue
+
+        # Parse package specifier: name==version or name>=version etc.
+        match = re.match(
+            r"^([A-Za-z0-9_\-\.]+)"      # package name
+            r"\s*([=!<>~^]+)\s*"          # specifier operator
+            r"([0-9][^\s#;]*)(.*)$",       # version + tail
+            stripped,
+        )
+        if match:
+            pkg_name = match.group(1)
+            operator = match.group(2)
+            _cur_version = match.group(3)
+            tail = match.group(4)
+
+            fix_ver = fixable.get(pkg_name.lower())
+            if fix_ver and operator in ("==", "<="):
+                # Replace pinned or capped version with the fixed version
+                new_line = f"{pkg_name}>={fix_ver}{tail}\n"
+                new_lines.append(new_line)
+                patched += 1
+                continue
+
+        new_lines.append(line)
+
+    if patched > 0:
+        try:
+            with open(req_file_path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+        except Exception:
+            return 0
+
+    return patched
+

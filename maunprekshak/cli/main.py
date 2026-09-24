@@ -19,10 +19,12 @@ from maunprekshak.scanner.report import (
     to_cyclonedx,
     to_spdx,
     to_html,
+    to_gitlab,
+    format_github_annotations,
     generate_ai_summary,
     aggregate,
 )
-from maunprekshak.scanner.fixer import apply_auto_fixes
+from maunprekshak.scanner.fixer import apply_auto_fixes, fix_requirements_txt
 
 # Auto-load .env from the current directory or any parent directory
 load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
@@ -70,8 +72,8 @@ def get_git_diff_files(repo_path: str, ref: Optional[str] = None) -> List[str]:
 @app.command()
 def scan(
     path: str = typer.Argument(".", help="Path to project or directory to scan"),
-    only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast"),
-    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx, html"),
+    only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast, k8s"),
+    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx, html, gitlab"),
     output_file: Optional[str] = typer.Option(None, help="Save output to this file path"),
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
@@ -80,13 +82,14 @@ def scan(
     staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
     diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
     baseline: Optional[str] = typer.Option(None, "--baseline", help="Path to baseline JSON report to suppress existing findings"),
-    fix: bool = typer.Option(False, "--fix", help="Automatically patch safe security anti-patterns (MP012, MP023, MP014)"),
+    fix: bool = typer.Option(False, "--fix", help="Automatically patch safe SAST anti-patterns (MP012, MP023, MP014) and vulnerable requirements.txt entries"),
     ai_provider: str = typer.Option("auto", "--ai-provider", help="AI provider: auto, gemini, openai, anthropic, ollama"),
     ai_model: Optional[str] = typer.Option(None, "--ai-model", help="AI model name (e.g. gpt-4o-mini, claude-3-5-haiku-20241022, gemini-2.5-flash, llama3.2)"),
     ai_base_url: Optional[str] = typer.Option(None, "--ai-base-url", help="Custom AI API base URL (e.g. http://localhost:11434/v1 or private gateway)"),
     rules_file: Optional[str] = typer.Option(None, "--rules-file", help="Path to custom rules file (.maunprekshak-rules.yaml)"),
     history: bool = typer.Option(False, "--history", help="Scan git commit history for leaked credentials"),
     commits: Optional[int] = typer.Option(None, "--commits", help="Maximum number of historical commits to scan (default: 50)"),
+    annotations: bool = typer.Option(False, "--annotations", help="Emit GitHub Actions workflow annotation commands (::error:: / ::warning::) for inline PR annotations"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -192,7 +195,19 @@ def scan(
             status.update("[bold green]Applying auto-fixes for safe anti-patterns...")
             fixed_count, result = apply_auto_fixes(result)
             if fixed_count > 0 and output == "console":
-                console.print(f"[bold green]✓ Auto-fixed {fixed_count} security anti-pattern(s)[/bold green]")
+                console.print(f"[bold green]✓ Auto-fixed {fixed_count} SAST security anti-pattern(s)[/bold green]")
+
+            # Dep auto-fix: patch vulnerable requirements.txt entries
+            if result.deps:
+                req_candidates = [
+                    os.path.join(path, "requirements.txt"),
+                    os.path.join(path, "requirements", "base.txt"),
+                    os.path.join(path, "requirements", "prod.txt"),
+                ]
+                for req_path in req_candidates:
+                    dep_fixed = fix_requirements_txt(req_path, result.deps)
+                    if dep_fixed > 0 and output == "console":
+                        console.print(f"[bold green]✓ Auto-patched {dep_fixed} vulnerable dependency version(s) in {os.path.basename(req_path)}[/bold green]")
 
         if not effective_no_ai:
             provider_label = f" ({effective_ai_provider})" if effective_ai_provider != "auto" else ""
@@ -250,6 +265,14 @@ def scan(
             console.print(f"[bold green]Saved interactive HTML report to {output_file}[/bold green]")
         else:
             print(out_str)
+    elif output == "gitlab":
+        proj_name = Path(path).resolve().name or "project"
+        out_str = to_gitlab(result, project_root=path)
+        default_name = "gl-sast-report.json"
+        out_path = output_file or default_name
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(out_str)
+        console.print(f"[bold green]Saved GitLab SAST report to {out_path}[/bold green]")
     elif output == "pdf" and output_file:
         to_pdf(result, output_file)
         console.print(f"[bold green]Saved PDF to {output_file}[/bold green]")
@@ -263,6 +286,13 @@ def scan(
         if result.ai_summary:
             console.print("\n[bold]AI Summary:[/bold]")
             console.print(result.ai_summary)
+
+    # GitHub Actions annotations — auto-detect GITHUB_ACTIONS env var or explicit --annotations flag
+    effective_annotations = annotations or os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+    if effective_annotations and result.total_findings > 0:
+        annotation_lines = format_github_annotations(result, project_root=path)
+        if annotation_lines:
+            print(annotation_lines)
 
     if ci:
         severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}

@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-24
+
+### Added
+- **Kubernetes & Helm Manifest Security Scanner** (`--only k8s`):
+  - Eight new K8S001–K8S008 rules detecting privileged containers, missing resource limits/requests, root user execution, sensitive hostPath volume mounts, dangerous Linux capabilities, privilege escalation, writable root filesystems, and unrestricted service account token auto-mounting.
+  - Heuristic K8s manifest detection (apiVersion + kind header) to avoid false positives on non-K8s YAML files.
+  - Full inline suppression support via `# maunprekshak: ignore[K8S001]` and `# nosec` comments.
+  - Integrated into the `scan_project()` orchestration pipeline alongside Dockerfile and GitHub Actions workflow scanning.
+
+- **Five New SAST Rules (MP031–MP035)**:
+  - **MP031** (CRITICAL): `torch.load()` without `weights_only=True` — arbitrary pickle deserialization / RCE risk in AI/ML pipelines.
+  - **MP032** (HIGH): Regular Expression Denial of Service (ReDoS) — detects catastrophic nested quantifier patterns (`(a+)+`, `([a-z]+)*`, etc.) in `re.compile()`, `re.search()`, and related calls.
+  - **MP033** (MEDIUM): World-writable `os.chmod()` with `0o777` — fully permissive file permission risk.
+  - **MP034** (HIGH): LDAP injection — dynamic search filter construction via f-strings or `.format()` in `ldap`/`ldap3` search calls.
+  - **MP035** (HIGH): XPath injection — dynamic XPath expression construction via f-strings or `+` concatenation in `etree.xpath()` / `etree.find()`.
+
+- **GitHub Actions PR Annotations** (`--annotations`):
+  - Emits `::error::` and `::warning::` workflow commands for inline Pull Request file annotations.
+  - Auto-detected when `GITHUB_ACTIONS=true` environment variable is set; no explicit flag needed in CI.
+  - CRITICAL/HIGH findings → `::error`, MEDIUM/LOW → `::warning`.
+
+- **GitLab CI SAST Report Export** (`--output gitlab`):
+  - Generates `gl-sast-report.json` in the official GitLab Security Dashboard v15 schema.
+  - Includes SAST, secrets, and dependency findings with proper identifiers, severity mappings, and scanner metadata.
+  - Compatible with GitLab Security & Compliance dashboards out-of-the-box.
+
+- **Dependency Auto-Fix** (`--fix` extended):
+  - `fix_requirements_txt()` in `scanner/fixer.py` automatically bumps vulnerable pinned (`==`) and capped (`<=`) dependency versions in `requirements.txt` to `>={fix_version}`.
+  - Searches `requirements.txt`, `requirements/base.txt`, and `requirements/prod.txt`.
+  - Preserves all comments, blank lines, and non-vulnerable dependencies untouched.
+
+### Changed
+- `--only` flag now accepts `k8s` / `kubernetes` to run only the Kubernetes manifest scanner.
+- `--output` flag now accepts `gitlab` to produce GitLab CI SAST JSON reports.
+- `--fix` flag now additionally patches `requirements.txt` dependency versions in addition to SAST auto-fixes (MP012, MP023, MP014).
+- Version bumped from `0.9.0` → `0.10.0`.
+
+### Fixed
+- Self-scan: Added `nosec: MP032` suppression on the `_REDOS_PATTERNS` internal regex definition to prevent false-positive self-flagging.
+
 ## [0.9.0] - 2026-09-23
 
 ### Added

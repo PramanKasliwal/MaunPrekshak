@@ -8,6 +8,7 @@ from maunprekshak.scanner.secrets import scan_secrets
 from maunprekshak.scanner.sast import scan_sast
 from maunprekshak.scanner.dockerfile import scan_dockerfiles
 from maunprekshak.scanner.workflows import scan_workflows
+from maunprekshak.scanner.k8s import scan_k8s_manifests
 from maunprekshak.scanner.git_history import scan_git_history
 from maunprekshak.scanner.custom_rules import (
     load_custom_rules,
@@ -68,6 +69,10 @@ async def scan_project_async(
     if only is None or only in ("sast", "workflow", "ci"):
         workflow_findings = scan_workflows(path, exclude=exclude, target_files=target_files)
         sast.extend(workflow_findings)
+
+    if only is None or only in ("sast", "k8s", "kubernetes"):
+        k8s_findings = scan_k8s_manifests(path, exclude=exclude, target_files=target_files)
+        sast.extend(k8s_findings)
 
     # Evaluate custom rules across files if any rules are loaded
     if custom_rules.total_rules > 0:

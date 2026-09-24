@@ -41,6 +41,11 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP028  pandas.read_pickle() code exec HIGH
 # MP029  Missing secure cookie flags   MEDIUM
 # MP030  Hardcoded crypto IV or salt   HIGH
+# MP031  Insecure ML model load        CRITICAL
+# MP032  Regular expression ReDoS      HIGH
+# MP033  World-writable chmod (0o777)  MEDIUM
+# MP034  LDAP injection                HIGH
+# MP035  XPath injection               HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -385,7 +390,117 @@ class SecurityVisitor(ast.NodeVisitor):
                           "Hardcoded cryptographic IV or salt detected — predictable values weaken encryption and hashing",
                           "Generate dynamic, cryptographically secure random IVs and salts using os.urandom() or secrets.token_bytes().")
 
+        # MP031 — Insecure ML model deserialization (torch.load without weights_only=True)
+        elif (
+            (obj in ("torch",) and method == "load")
+            or full_func in ("torch.load",)
+        ):
+            has_weights_only = False
+            for kw in node.keywords:
+                if kw.arg == "weights_only" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    has_weights_only = True
+            if not has_weights_only:
+                self._add(node, "MP031", Severity.CRITICAL.value,
+                          "torch.load() without weights_only=True can execute arbitrary pickle bytecode — remote code execution risk",
+                          "Use torch.load(path, weights_only=True) to safely load only tensor weights without executing pickle bytecode.")
+
+        # MP034 — LDAP Injection via dynamic filter construction
+        elif (
+            (obj in ("ldap", "ldap3", "Connection", "conn", "c") and method in ("search", "search_s", "search_ext", "search_ext_s"))
+            or full_func in ("ldap.search", "ldap.search_s", "ldap3.Connection.search")
+        ):
+            if node.args and len(node.args) >= 2:
+                filter_arg = node.args[1] if len(node.args) > 1 else None
+                if filter_arg and isinstance(filter_arg, (ast.JoinedStr, ast.BinOp)):
+                    self._add(node, "MP034", Severity.HIGH.value,
+                              "LDAP injection risk: search filter constructed via string formatting with dynamic input",
+                              "Sanitize all user-controlled input using ldap.filter.escape_filter_chars() before embedding in LDAP filters.")
+                elif filter_arg and isinstance(filter_arg, ast.Call) and isinstance(filter_arg.func, ast.Attribute):
+                    if filter_arg.func.attr == "format":
+                        self._add(node, "MP034", Severity.HIGH.value,
+                                  "LDAP injection risk: search filter constructed via .format() with dynamic input",
+                                  "Sanitize all user-controlled input using ldap.filter.escape_filter_chars() before embedding in LDAP filters.")
+
+        # MP035 — XPath Injection via unparameterized dynamic expression
+        elif (
+            (obj in ("etree", "tree", "root", "doc") and method in ("xpath", "find", "findall", "iterfind"))
+            or (func_name == "XPath" and isinstance(node.func, ast.Name))
+            or full_func in ("lxml.etree.XPath", "etree.XPath")
+        ):
+            if node.args:
+                expr_arg = node.args[0]
+                is_dynamic = (
+                    isinstance(expr_arg, (ast.JoinedStr, ast.BinOp))
+                    or (isinstance(expr_arg, ast.Call) and isinstance(expr_arg.func, ast.Attribute) and expr_arg.func.attr == "format")
+                )
+                if is_dynamic:
+                    self._add(node, "MP035", Severity.HIGH.value,
+                              "XPath injection risk: XPath expression constructed via string formatting with dynamic input",
+                              "Use parameterized XPath with a dictionary of variables (e.g. etree.XPath('//item[@id=$val]')(tree, val=user_input)) or sanitize input before use.")
+
+        self._extra_call_checks(node)
         self.generic_visit(node)
+
+    # ── MP032 / MP033 extra visitors ─────────────────────────────────────────
+
+    # Patterns indicative of catastrophic exponential backtracking (ReDoS)
+    _REDOS_PATTERNS = re.compile(  # nosec: MP032 — intentional ReDoS detection pattern, not user-controlled
+        r"""
+        (\([^)]*[+*]\)+[+*])   # (a+)+ style nested
+        |(\([^)]*\)[*+]\{)     # (a){m,n}+ overlapping
+        |(\[[^\]]+\][+*]\{)    # [a-z]+{m,n}
+        |(\([^)]*[|][^)]*\)[+*]\{)  # alternation + repeat
+        |(\([^)]*\+[^)]*\)\+)  # inner + with outer +
+        """,
+        re.VERBOSE,
+    )
+
+    def _check_redos(self, node: ast.Call, pattern_arg: ast.expr) -> None:
+        """Check a compiled/called regex pattern argument for ReDoS signatures."""
+        if not isinstance(pattern_arg, ast.Constant) or not isinstance(pattern_arg.value, str):
+            return
+        pattern_str = pattern_arg.value
+        if self._REDOS_PATTERNS.search(pattern_str):
+            self._add(node, "MP032", Severity.HIGH.value,
+                      f"Regular Expression Denial of Service (ReDoS) risk: nested quantifiers in pattern '{pattern_str[:60]}'",
+                      "Rewrite the regex to avoid nested quantifiers like (a+)+, ([a-z]+)*, (a|aa)+. Use atomic groups or possessive quantifiers if available.")
+
+    def visit_Call_mp032_mp033(self, node: ast.Call) -> None:
+        """
+        Secondary visitor pass for MP032 (ReDoS) and MP033 (world-writable chmod).
+        Called from the main visit_Call via the check below.
+        """
+        pass  # Logic injected directly into visit_Call chain via _extra_call_checks
+
+    def _extra_call_checks(self, node: ast.Call) -> None:
+        """
+        Run additional per-call checks that are independent of the main elif chain.
+        Called unconditionally at the end of visit_Call processing.
+        """
+        func_name = self._get_func_name(node)
+        obj, method = self._get_attr_chain(node)
+        full_func = self._get_full_func_name(node)
+
+        # MP032 — ReDoS: re.compile() or re.match/search/fullmatch with dangerous pattern
+        if (obj == "re" and method in ("compile", "match", "search", "fullmatch", "sub", "findall", "split")) or (
+            func_name in ("compile",) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "re"
+        ):
+            if node.args:
+                self._check_redos(node, node.args[0])
+
+        # MP033 — World-writable chmod 0o777 / 0o666 / 0o757 etc.
+        if ((obj == "os" and method == "chmod") or full_func == "os.chmod") and len(node.args) >= 2:
+            arg1 = node.args[1]
+            if isinstance(arg1, ast.Constant) and isinstance(arg1.value, int):
+                # 0o777 → & 0o022 != 0 means group-or-world writable
+                # We specifically flag world-writable (others write bit 0o002)
+                # and also the common insecure pattern 0o777
+                if arg1.value in (0o777, 0o666, 0o776, 0o775, 0o757, 0o755 | 0o022):
+                    # Only flag if it's strictly world-writable beyond MP021's coverage
+                    if arg1.value == 0o777:
+                        self._add(node, "MP033", Severity.MEDIUM.value,
+                                  f"os.chmod() sets fully permissive mode {oct(arg1.value)} (world-readable, writable, and executable)",
+                                  "Use restrictive permissions: 0o600 for private files, 0o644 for readable files, 0o700 for private executables.")
 
     def visit_Assert(self, node: ast.Assert) -> None:
         """MP010 — assert used for security checks (stripped in optimized mode)."""

@@ -607,6 +607,198 @@ def to_spdx(scan_result: ScanResult, project_name: str = "project") -> str:
     return json.dumps(spdx_data, indent=2)
 
 
+def to_gitlab(scan_result: ScanResult, project_root: str = ".") -> str:
+    """
+    Generate a GitLab CI SAST report in the official GitLab SAST Report v15 schema.
+    Compatible with GitLab Security & Compliance dashboards (gl-sast-report.json).
+    """
+    from datetime import datetime, timezone
+
+    root = os.path.abspath(project_root)
+
+    def _relpath(p: str) -> str:
+        try:
+            rel = os.path.relpath(os.path.abspath(p), root)
+            return rel.replace("\\", "/") if not rel.startswith("..") else os.path.basename(p)
+        except Exception:
+            return os.path.basename(p)
+
+    severity_map = {
+        "CRITICAL": "Critical",
+        "HIGH": "High",
+        "MEDIUM": "Medium",
+        "LOW": "Low",
+        "INFO": "Info",
+    }
+
+    vulnerabilities = []
+
+    for s in scan_result.sast:
+        vuln_id = f"{s.check_id}-{os.path.basename(s.file_path)}-{s.line}"
+        vulnerabilities.append({
+            "id": vuln_id,
+            "category": "sast",
+            "name": s.check_id,
+            "message": s.description,
+            "description": f"{s.description}. {s.recommendation}",
+            "cve": vuln_id,
+            "severity": severity_map.get(s.severity.upper(), "Medium"),
+            "confidence": "High",
+            "solution": s.recommendation,
+            "scanner": {
+                "id": "maunprekshak",
+                "name": "MaunPrekshak",
+            },
+            "location": {
+                "file": _relpath(s.file_path),
+                "start_line": s.line,
+                "end_line": s.line,
+            },
+            "identifiers": [
+                {
+                    "type": "maunprekshak_rule_id",
+                    "name": s.check_id,
+                    "value": s.check_id,
+                    "url": "https://github.com/PramanKasliwal/maunprekshak#static-code-analysis-sast",
+                }
+            ],
+        })
+
+    for sec in scan_result.secrets:
+        vuln_id = f"SECRET-{os.path.basename(sec.file_path)}-{sec.line}"
+        vulnerabilities.append({
+            "id": vuln_id,
+            "category": "sast",
+            "name": sec.secret_type,
+            "message": f"Exposed secret: {sec.secret_type}",
+            "description": f"A credential of type '{sec.secret_type}' was detected at line {sec.line}.",
+            "cve": vuln_id,
+            "severity": severity_map.get(sec.severity.upper(), "High"),
+            "confidence": "High",
+            "solution": "Remove the credential from source code, rotate it immediately, and use environment variables or a secrets manager.",
+            "scanner": {
+                "id": "maunprekshak",
+                "name": "MaunPrekshak",
+            },
+            "location": {
+                "file": _relpath(sec.file_path),
+                "start_line": sec.line,
+                "end_line": sec.line,
+            },
+            "identifiers": [
+                {
+                    "type": "maunprekshak_secret_type",
+                    "name": sec.secret_type,
+                    "value": sec.secret_type,
+                    "url": "https://github.com/PramanKasliwal/maunprekshak#secrets-detection",
+                }
+            ],
+        })
+
+    for dep in scan_result.deps:
+        vuln_id = f"DEP-{dep.cve_id}-{dep.package}"
+        vulnerabilities.append({
+            "id": vuln_id,
+            "category": "dependency_scanning",
+            "name": dep.cve_id,
+            "message": f"{dep.package} {dep.version} — {dep.cve_id}",
+            "description": dep.description,
+            "cve": dep.cve_id,
+            "severity": severity_map.get(dep.severity.upper(), "High"),
+            "confidence": "High",
+            "solution": f"Upgrade {dep.package} to {dep.fix_version}." if dep.fix_version else "Check upstream for a patched release.",
+            "scanner": {
+                "id": "maunprekshak",
+                "name": "MaunPrekshak",
+            },
+            "location": {
+                "file": "requirements.txt",
+                "start_line": 1,
+                "end_line": 1,
+                "dependency": {
+                    "package": {"name": dep.package},
+                    "version": dep.version,
+                },
+            },
+            "identifiers": [
+                {
+                    "type": "cve",
+                    "name": dep.cve_id,
+                    "value": dep.cve_id,
+                    "url": f"https://osv.dev/vulnerability/{dep.cve_id}",
+                }
+            ],
+        })
+
+    report = {
+        "schema": "https://gitlab.com/gitlab-org/security-products/security-report-schemas/-/raw/master/dist/sast-report-format.json",
+        "version": "15.0.6",
+        "scan": {
+            "scanner": {
+                "id": "maunprekshak",
+                "name": "MaunPrekshak",
+                "url": "https://github.com/PramanKasliwal/maunprekshak",
+                "vendor": {"name": "Praman Kasliwal"},
+                "version": __version__,
+            },
+            "type": "sast",
+            "start_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "status": "success",
+        },
+        "vulnerabilities": vulnerabilities,
+    }
+    return json.dumps(report, indent=2)
+
+
+def format_github_annotations(scan_result: ScanResult, project_root: str = ".") -> str:
+    """
+    Format scan findings as GitHub Actions workflow commands for PR annotations.
+    Emits ::error:: and ::warning:: commands that GitHub Actions renders as
+    inline annotations on the Pull Request "Files Changed" tab.
+
+    Automatically used when GITHUB_ACTIONS=true or --annotations flag is set.
+    """
+    root = os.path.abspath(project_root)
+
+    def _relpath(p: str) -> str:
+        try:
+            rel = os.path.relpath(os.path.abspath(p), root)
+            return rel.replace("\\", "/") if not rel.startswith("..") else os.path.basename(p)
+        except Exception:
+            return os.path.basename(p)
+
+    lines_out = []
+
+    for s in scan_result.sast:
+        level = "error" if s.severity.upper() in ("CRITICAL", "HIGH") else "warning"
+        rel_file = _relpath(s.file_path)
+        # Sanitize title and message for GitHub Actions command format
+        title = s.check_id.replace(",", " ").replace("\n", " ")
+        msg = s.description.replace(",", " ").replace("\n", " ").replace("%", "%25")
+        lines_out.append(
+            f"::{level} file={rel_file},line={s.line},col={s.col + 1},title={title}::{msg}"
+        )
+
+    for sec in scan_result.secrets:
+        rel_file = _relpath(sec.file_path)
+        title = sec.secret_type.replace(",", " ").replace("\n", " ")
+        msg = f"Exposed secret of type '{sec.secret_type}' detected. Remove and rotate immediately.".replace(",", " ")
+        lines_out.append(
+            f"::error file={rel_file},line={sec.line},col=1,title={title}::{msg}"
+        )
+
+    for dep in scan_result.deps:
+        level = "error" if dep.severity.upper() in ("CRITICAL", "HIGH") else "warning"
+        title = dep.cve_id.replace(",", " ")
+        msg = f"{dep.package} {dep.version}: {dep.description[:120]}".replace(",", " ").replace("\n", " ")
+        lines_out.append(
+            f"::{level} title={title}::{msg}"
+        )
+
+    return "\n".join(lines_out)
+
+
 def to_html(scan_result: ScanResult, project_name: str = "project") -> str:
     """
     Generate an interactive, standalone single-file HTML security audit report.
