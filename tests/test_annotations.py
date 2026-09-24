@@ -74,3 +74,28 @@ class TestGitHubAnnotations:
         result = aggregate([], [], sast)
         out = format_github_annotations(result)
         assert out.startswith("::warning")
+
+    def test_cli_annotations_flag_emits_in_console_mode(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from maunprekshak.cli.main import app
+
+        (tmp_path / "insecure.py").write_text("eval('2+2')\n")
+        runner = CliRunner()
+        res = runner.invoke(app, ["scan", str(tmp_path), "--annotations", "--no-ai", "--output", "console"])
+        assert "::error" in res.stdout
+        assert "MP001" in res.stdout
+
+    def test_github_actions_env_does_not_corrupt_json_stdout(self, tmp_path, monkeypatch):
+        import json
+        from typer.testing import CliRunner
+        from maunprekshak.cli.main import app
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        (tmp_path / "insecure.py").write_text("eval('2+2')\n")
+        runner = CliRunner()
+        res = runner.invoke(app, ["scan", str(tmp_path), "--no-ai", "--output", "json"])
+        # Should be valid JSON without ::error strings in stdout
+        data = json.loads(res.stdout)
+        assert "sast" in data
+        assert "::error" not in res.stdout
+

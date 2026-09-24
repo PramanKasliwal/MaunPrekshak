@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-24
+
+### Fixed
+- **GitHub Actions Annotations & Baseline Suppression**:
+  - Fixed an issue where running `maunprekshak scan .` in GitHub Actions with non-console output formats (e.g., `--output json`, `--output sarif`) would output `::error::` annotations to stdout, corrupting structured machine-readable streams and breaking baseline suppression (`--baseline`).
+  - GitHub Actions annotations auto-detection is now scoped to console output or when an output file is explicitly provided, preserving raw stdout for JSON/SARIF/GitLab export.
+  - Added robust fallback parsing for `--baseline` JSON reports to handle leading or trailing text gracefully.
+  - Removed erroneous `.pre-commit-config.yaml` file from `.github/workflows/` that caused spurious CI workflow failures.
+
 ## [0.10.0] - 2026-09-24
 
 ### Added

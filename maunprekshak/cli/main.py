@@ -1,7 +1,9 @@
 import json
-import typer
 import os
+import re
+import sys
 import subprocess
+import typer
 from pathlib import Path
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -151,7 +153,15 @@ def scan(
             if os.path.isfile(baseline):
                 try:
                     with open(baseline, "r", encoding="utf-8") as bf:
-                        bdata = json.load(bf)
+                        raw_content = bf.read().strip()
+                    try:
+                        bdata = json.loads(raw_content)
+                    except json.JSONDecodeError:
+                        m = re.search(r"(\{[\s\S]*\})", raw_content)
+                        if m:
+                            bdata = json.loads(m.group(1))
+                        else:
+                            raise
                     base_deps = {
                         (d.get("package", "").lower(), str(d.get("version", "")), str(d.get("cve_id", "")))
                         for d in bdata.get("deps", [])
@@ -288,11 +298,19 @@ def scan(
             console.print(result.ai_summary)
 
     # GitHub Actions annotations — auto-detect GITHUB_ACTIONS env var or explicit --annotations flag
-    effective_annotations = annotations or os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
-    if effective_annotations and result.total_findings > 0:
-        annotation_lines = format_github_annotations(result, project_root=path)
-        if annotation_lines:
-            print(annotation_lines)
+    if annotations:
+        if result.total_findings > 0:
+            annotation_lines = format_github_annotations(result, project_root=path)
+            if annotation_lines:
+                if output == "console" or output_file is not None:
+                    print(annotation_lines)
+                else:
+                    sys.stderr.write(annotation_lines + "\n")
+    elif os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        if (output == "console" or output_file is not None) and result.total_findings > 0:
+            annotation_lines = format_github_annotations(result, project_root=path)
+            if annotation_lines:
+                print(annotation_lines)
 
     if ci:
         severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
