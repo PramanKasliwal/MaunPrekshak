@@ -259,6 +259,17 @@ def scan_workflows(
     """Scan all GitHub Actions workflows in a project for CI/CD security vulnerabilities."""
     findings: List[SASTFinding] = []
     abs_path = os.path.abspath(path)
+    active_excludes = set(EXCLUDE_DIRS)
+    if exclude:
+        for e in exclude:
+            cleaned = e.strip().rstrip("/\\")
+            if cleaned.startswith("./"):
+                cleaned = cleaned[2:]
+            if cleaned:
+                active_excludes.add(cleaned)
+                base = os.path.basename(cleaned)
+                if base:
+                    active_excludes.add(base)
 
     if target_files is not None:
         workflow_files = [
@@ -268,6 +279,11 @@ def scan_workflows(
             and os.path.isfile(f)
         ]
         for wf in workflow_files:
+            rel_wf = os.path.relpath(wf, path).replace("\\", "/")
+            path_parts = set(wf.replace("\\", "/").split("/"))
+            bname = os.path.basename(wf)
+            if path_parts & active_excludes or rel_wf in active_excludes or bname in active_excludes:
+                continue
             findings.extend(scan_single_workflow(wf))
         return findings
 
@@ -275,10 +291,25 @@ def scan_workflows(
     if not os.path.isdir(workflows_dir):
         return []
 
+    rel_workflows_dir = os.path.relpath(workflows_dir, path).replace("\\", "/")
+    if (
+        ".github" in active_excludes
+        or "workflows" in active_excludes
+        or rel_workflows_dir in active_excludes
+    ):
+        return []
+
     for root, dirs, files in os.walk(workflows_dir):
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        dirs[:] = [
+            d for d in dirs
+            if d not in active_excludes
+            and os.path.relpath(os.path.join(root, d), path).replace("\\", "/") not in active_excludes
+        ]
         for file in files:
             if file.endswith((".yml", ".yaml")):
+                rel_file = os.path.relpath(os.path.join(root, file), path).replace("\\", "/")
+                if file in active_excludes or rel_file in active_excludes:
+                    continue
                 full_path = os.path.join(root, file)
                 findings.extend(scan_single_workflow(full_path))
 

@@ -204,7 +204,15 @@ def scan_dockerfiles(
     findings: List[SASTFinding] = []
     active_excludes = set(EXCLUDE_DIRS)
     if exclude:
-        active_excludes.update(exclude)
+        for e in exclude:
+            cleaned = e.strip().rstrip("/\\")
+            if cleaned.startswith("./"):
+                cleaned = cleaned[2:]
+            if cleaned:
+                active_excludes.add(cleaned)
+                base = os.path.basename(cleaned)
+                if base:
+                    active_excludes.add(base)
 
     if target_files is not None:
         for f in target_files:
@@ -212,12 +220,23 @@ def scan_dockerfiles(
             bname = os.path.basename(abs_path)
             if not os.path.isfile(abs_path):
                 continue
+            path_parts = set(abs_path.replace("\\", "/").split("/"))
+            rel_file = os.path.relpath(abs_path, path).replace("\\", "/")
+            if path_parts & active_excludes or rel_file in active_excludes or bname in active_excludes:
+                continue
             if bname == "Dockerfile" or bname.startswith("Dockerfile.") or bname.endswith(".Dockerfile"):
                 findings.extend(scan_single_dockerfile(abs_path))
     else:
         for root, dirs, files in os.walk(path):
-            dirs[:] = [d for d in dirs if d not in active_excludes]
+            dirs[:] = [
+                d for d in dirs
+                if d not in active_excludes
+                and os.path.relpath(os.path.join(root, d), path).replace("\\", "/") not in active_excludes
+            ]
             for filename in files:
+                rel_file = os.path.relpath(os.path.join(root, filename), path).replace("\\", "/")
+                if filename in active_excludes or rel_file in active_excludes:
+                    continue
                 if filename == "Dockerfile" or filename.startswith("Dockerfile.") or filename.endswith(".Dockerfile"):
                     file_path = os.path.join(root, filename)
                     findings.extend(scan_single_dockerfile(file_path))

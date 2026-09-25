@@ -71,6 +71,25 @@ def get_git_diff_files(repo_path: str, ref: Optional[str] = None) -> List[str]:
         return []
 
 
+def _normalize_excludes(raw_excludes) -> List[str]:
+    """Normalize exclusion list from CLI flag or config file."""
+    if not raw_excludes:
+        return []
+    items = [raw_excludes] if isinstance(raw_excludes, str) else list(raw_excludes)
+    result = set()
+    for item in items:
+        for part in str(item).split(","):
+            cleaned = part.strip().rstrip("/\\")
+            if cleaned.startswith("./"):
+                cleaned = cleaned[2:]
+            if cleaned:
+                result.add(cleaned)
+                base = os.path.basename(cleaned)
+                if base:
+                    result.add(base)
+    return sorted(list(result))
+
+
 @app.command()
 def scan(
     path: str = typer.Argument(".", help="Path to project or directory to scan"),
@@ -80,7 +99,7 @@ def scan(
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
     no_ai: bool = typer.Option(False, help="Skip AI summary generation"),
-    exclude: Optional[str] = typer.Option(None, help="Comma-separated dirs to exclude (e.g. tests,fixtures)"),
+    exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Directories or files to exclude (e.g. --exclude tests,fixtures or pass multiple --exclude)"),
     staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
     diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
     baseline: Optional[str] = typer.Option(None, "--baseline", help="Path to baseline JSON report to suppress existing findings"),
@@ -97,10 +116,8 @@ def scan(
     cfg = load_config(path)
 
     # Exclusions precedence: CLI flag > .maunprekshak.toml > default
-    if exclude:
-        exclude_list = [e.strip() for e in exclude.split(",") if e.strip()]
-    else:
-        exclude_list = cfg.exclude
+    raw_exclude = exclude if exclude else cfg.exclude
+    exclude_list = _normalize_excludes(raw_exclude)
 
     effective_fail_on = fail_on if fail_on is not None else cfg.fail_on
     effective_no_ai = no_ai or cfg.no_ai

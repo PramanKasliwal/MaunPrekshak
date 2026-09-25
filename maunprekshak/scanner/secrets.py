@@ -212,7 +212,15 @@ def scan_secrets(
         "testing", "fixtures",
     }
     if exclude:
-        exclude_dirs.update(exclude)
+        for e in exclude:
+            cleaned = e.strip().rstrip("/\\")
+            if cleaned.startswith("./"):
+                cleaned = cleaned[2:]
+            if cleaned:
+                exclude_dirs.add(cleaned)
+                base = os.path.basename(cleaned)
+                if base:
+                    exclude_dirs.add(base)
 
     valid_extensions = {".py", ".yaml", ".yml", ".json", ".cfg", ".ini", ".toml", ".pem", ".key", ".go", ".js", ".ts", ".env"}
     compiled_patterns = {name: re.compile(pattern) for name, pattern in PATTERNS.items()}
@@ -224,7 +232,11 @@ def scan_secrets(
             if not os.path.isfile(abs_path):
                 continue
             filename = os.path.basename(abs_path)
-            if filename in SELF_EXCLUDE_FILES:
+            if filename in SELF_EXCLUDE_FILES or filename in exclude_dirs:
+                continue
+            rel_file = os.path.relpath(abs_path, path).replace("\\", "/")
+            path_parts = set(abs_path.replace("\\", "/").split("/"))
+            if path_parts & exclude_dirs or rel_file in exclude_dirs:
                 continue
             _, ext = os.path.splitext(filename)
             is_env_file = filename.startswith(".env")
@@ -235,11 +247,19 @@ def scan_secrets(
         return findings
 
     for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        dirs[:] = [
+            d for d in dirs
+            if d not in exclude_dirs
+            and os.path.relpath(os.path.join(root, d), path).replace("\\", "/") not in exclude_dirs
+        ]
 
         for file in files:
             # Skip scanner internals to avoid self-referential false positives
-            if file in SELF_EXCLUDE_FILES:
+            if file in SELF_EXCLUDE_FILES or file in exclude_dirs:
+                continue
+
+            rel_file = os.path.relpath(os.path.join(root, file), path).replace("\\", "/")
+            if rel_file in exclude_dirs:
                 continue
 
             _, ext = os.path.splitext(file)
