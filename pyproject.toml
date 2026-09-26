@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maunprekshak"
-version = "0.10.1"
+version = "0.10.2"
 description = "The Silent Observer — Open-source Python security scanner for dependencies, secrets & insecure code"
 readme = "README.md"
 license = { text = "Apache-2.0" }

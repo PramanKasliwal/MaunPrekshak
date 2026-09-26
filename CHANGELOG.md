@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-09-26
+
+### Fixed & Enhanced
+- **Robust `--exclude` Path & File Filtering**:
+  - Automatically normalizes exclusion patterns by stripping trailing slashes (`tests/` or `tests\\`) and relative path prefixes (`./tests/` or `./tests`), preventing shell tab-completion from silently bypassing exclusions.
+  - Supports passing `--exclude` multiple times (e.g. `--exclude tests --exclude fixtures`), accumulating exclusions instead of overwriting previous flags.
+  - Supports comma-separated exclusion strings (e.g. `--exclude "tests,fixtures,legacy"`).
+  - Extended path filtering to match nested relative subpaths (e.g. `src/legacy`) as well as directory basenames across all scanners (SAST, secrets, Kubernetes, Dockerfiles, and CI workflows).
+  - Added support for excluding specific files directly via `--exclude` (e.g. `--exclude bad_script.py` or `--exclude secrets.json`).
+  - Added unit test suite covering trailing slashes, dot-slashes, multiple flags, and comma-separated exclusion syntax.
+
 ## [0.10.1] - 2026-09-24
 
 ### Fixed
