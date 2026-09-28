@@ -15,13 +15,14 @@
 ## ⚡ Highlights
 
 - 🔍 **Dependency Vulnerabilities (SCA)**: Real-time CVE discovery against [OSV.dev](https://osv.dev) across Python (`poetry.lock`, `Pipfile.lock`, `uv.lock`, `requirements.txt`, `pyproject.toml`, `Pipfile`), JavaScript/Node.js (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `package.json`), Go modules (`go.sum`, `go.mod`), and Rust crates (`Cargo.lock`, `Cargo.toml`) for deep transitive dependency tracking. CI fails as soon as any finding meets the selected severity threshold.
-- 🔑 **Entropy & Regex Secrets Detection**: 40+ high-precision regex detectors (including OpenAI `sk-proj-`, Anthropic `sk-ant-`, HuggingFace `hf_`, GitLab `glpat-`, GitHub Fine-Grained PAT `github_pat_`, Discord, HashiCorp Vault, AWS, Stripe) PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys, with zero false-positives for UUIDs, URLs, and dummy values.
+- 🔑 **Entropy & Regex Secrets Detection**: 45+ high-precision regex detectors (including PyPI tokens, NPM tokens, OpenAI `sk-proj-`, Anthropic `sk-ant-admin-`, Postman `PMAK-`, Supabase `sbp-`, HuggingFace `hf_`, GitLab `glpat-`, GitHub Fine-Grained PAT, Discord, HashiCorp Vault, AWS, Stripe) PLUS Shannon entropy token analysis ($H \ge 4.5$ Base64 / $H \ge 3.0$ Hex) for un-prefixed tokens and private keys.
+- 🏗️ **Infrastructure-as-Code (IaC) Scanner**: Zero-dependency Terraform & OpenTofu static analysis (`TF001–TF008`) for AWS, GCP, and Azure cloud resources (`--only tf`).
 - 📜 **Git Commit History Secrets Scanner**: Deep-scan historical git commits with `--history` and `--commits <N>` to uncover leaked credentials that were committed and later "deleted" in git log.
 - 🛠️ **Custom Rule Engine**: Extend the scanner with proprietary secret patterns and custom SAST rules via `.maunprekshak-rules.yaml` or `--rules-file` without modifying core code.
-- 🛡️ **Static Code & CI/CD Analysis (SAST)**: 30 Python AST rules (MP001–MP030), Dockerfile container rules (DF001–DF006), and GitHub Actions workflow security checks (GHA001–GHA005).
+- 🛡️ **Static Code & CI/CD Analysis (SAST)**: 40 Python AST rules (MP001–MP040 including LLM prompt injection, SSRF, unsafe YAML, and deserialization), Kubernetes manifest checks (K8S001–K8S008), Dockerfile rules (DF001–DF006), and GitHub Actions workflow security checks (GHA001–GHA005).
 - 📊 **Interactive Standalone HTML Report**: Generate a 100% offline, single-file interactive HTML dashboard with search, filtering, and risk gauges via `--output html`.
 - ⚡ **Git Staged, Diff & Baseline Scanning**: Fast pre-commit mode via `--staged`, diff checks via `--diff`, and legacy debt suppression via `--baseline`.
-- 🎨 **Rich Terminal & Multi-Format Export**: Formatted console output, and standard OASIS SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3, HTML, JSON, or Markdown export.
+- 🎨 **Rich Terminal & Multi-Format CI/CD Export**: Formatted console output, SonarQube Generic Issue format (`--output sonarqube`), Code Climate / GitLab Code Quality (`--output codeclimate`), GitLab SAST v15 (`--output gitlab`), OASIS SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3, HTML, JSON, or Markdown export.
 - 🔒 **100% Privacy & Local-First**: Scans run entirely on your local CPU. Your source code never leaves your machine.
 - 🤖 **Multi-Provider AI Remediation**: Plug in Google Gemini, OpenAI, Anthropic Claude, or local offline Ollama for root-cause analysis and remediation steps.
 
@@ -98,6 +99,12 @@ mp scan ./my-project --output spdx --output-file bom.spdx.json
 
 # Export as JSON for pipelines
 mp scan ./my-project --output json > report.json
+
+# Export SonarQube Generic Issue Import JSON for sonar.externalIssuesReportPaths
+mp scan ./my-project --output sonarqube --output-file sonar-issues.json
+
+# Export Code Climate JSON for GitLab Code Quality / Code Climate CLI
+mp scan ./my-project --output codeclimate --output-file codeclimate.json
 
 # Export formatted Markdown
 mp scan ./my-project --output markdown > SECURITY.md

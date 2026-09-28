@@ -46,6 +46,11 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP033  World-writable chmod (0o777)  MEDIUM
 # MP034  LDAP injection                HIGH
 # MP035  XPath injection               HIGH
+# MP036  Unsafe YAML loading           HIGH
+# MP037  httpx/aiohttp SSRF injection  HIGH
+# MP038  LLM prompt injection vector   CRITICAL
+# MP039  joblib/cloudpickle load       HIGH
+# MP040  os.popen/asyncio shell exec   HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -167,14 +172,25 @@ class SecurityVisitor(ast.NodeVisitor):
                       "Use the `secrets` module for security-sensitive randomness: "
                       "secrets.token_hex(), secrets.choice(), secrets.randbelow().")
 
-        # MP012 — yaml.load() without Loader
+        # MP012 & MP036 — yaml.load() without Loader or with unsafe Loader
         elif obj == "yaml" and method == "load":
-            # Only flag if no Loader= kwarg is passed (unsafe)
-            has_loader = any(kw.arg == "Loader" for kw in node.keywords)
-            if not has_loader:
+            loader_kw = next((kw for kw in node.keywords if kw.arg == "Loader"), None)
+            if not loader_kw:
                 self._add(node, "MP012", Severity.HIGH.value,
                           "yaml.load() without explicit Loader can execute arbitrary Python",
                           "Use yaml.safe_load() or yaml.load(data, Loader=yaml.SafeLoader) instead.")
+            else:
+                val = loader_kw.value
+                unsafe_names = {"Loader", "UnsafeLoader", "CLoader"}
+                is_unsafe = False
+                if isinstance(val, ast.Name) and val.id in unsafe_names:
+                    is_unsafe = True
+                elif isinstance(val, ast.Attribute) and val.attr in unsafe_names:
+                    is_unsafe = True
+                if is_unsafe:
+                    self._add(node, "MP036", Severity.HIGH.value,
+                              "yaml.load() with Loader=yaml.Loader / UnsafeLoader allows arbitrary Python object execution",
+                              "Use yaml.safe_load() or yaml.load(data, Loader=yaml.SafeLoader) instead.")
 
         # MP013 — xml.etree (XXE vulnerable)
         elif obj == "ElementTree" and method == "parse":
@@ -437,6 +453,118 @@ class SecurityVisitor(ast.NodeVisitor):
                     self._add(node, "MP035", Severity.HIGH.value,
                               "XPath injection risk: XPath expression constructed via string formatting with dynamic input",
                               "Use parameterized XPath with a dictionary of variables (e.g. etree.XPath('//item[@id=$val]')(tree, val=user_input)) or sanitize input before use.")
+
+        # MP036 — Unsafe YAML loading (yaml.unsafe_load or Loader=yaml.Loader / UnsafeLoader / CLoader)
+        elif (
+            (obj == "yaml" and method == "unsafe_load")
+            or full_func in ("yaml.unsafe_load",)
+        ):
+            self._add(node, "MP036", Severity.HIGH.value,
+                      "yaml.unsafe_load() resolves arbitrary Python objects and can lead to remote code execution",
+                      "Use yaml.safe_load() or yaml.load(data, Loader=yaml.SafeLoader) instead.")
+
+        # MP037 — Blind SSRF in httpx / aiohttp / requests with dynamic unvalidated URLs
+        elif (
+            (obj in ("httpx", "aiohttp", "requests") and method in ("get", "post", "put", "delete", "patch", "head", "options", "request"))
+            or (obj in ("client", "session", "http_client", "async_client") and method in ("get", "post", "put", "delete", "patch", "head", "options", "request"))
+            or full_func.startswith(("httpx.", "requests.", "aiohttp."))
+        ):
+            url_node = None
+            if node.args:
+                url_node = node.args[0]
+            else:
+                for kw in node.keywords:
+                    if kw.arg == "url":
+                        url_node = kw.value
+                        break
+            if url_node:
+                is_dynamic = (
+                    isinstance(url_node, (ast.JoinedStr, ast.BinOp))
+                    or (isinstance(url_node, ast.Call) and isinstance(url_node.func, ast.Attribute) and url_node.func.attr == "format")
+                )
+                if is_dynamic:
+                    self._add(node, "MP037", Severity.HIGH.value,
+                              f"Blind SSRF risk: {obj or full_func}.{method}() invoked with dynamic URL without hostname/scheme validation",
+                              "Validate scheme (https only), verify target host against a strict allowlist, and resolve IP addresses before issuing outbound HTTP requests.")
+
+        # MP038 — LLM Prompt Injection risk: dynamic interpolation in system prompt or PromptTemplate
+        elif (
+            (func_name in ("create", "generate_content", "generate_content_async", "invoke", "ainvoke") and (
+                any(token in full_func.lower() for token in ("openai", "client", "anthropic", "model", "genai", "chat", "messages", "completions", "llm", "chain"))
+                or full_func.endswith((".create", ".generate_content", ".invoke"))
+            ))
+            or (func_name in ("PromptTemplate", "ChatPromptTemplate") or ("PromptTemplate" in full_func or "ChatPromptTemplate" in full_func))
+        ):
+            flagged = False
+            for kw in node.keywords:
+                if kw.arg == "system":
+                    if isinstance(kw.value, (ast.JoinedStr, ast.BinOp)) or (
+                        isinstance(kw.value, ast.Call) and isinstance(kw.value.func, ast.Attribute) and kw.value.func.attr == "format"
+                    ):
+                        self._add(node, "MP038", Severity.CRITICAL.value,
+                                  "LLM prompt injection risk: dynamic string interpolation (f-string or .format) into system prompt instructions",
+                                  "Separate developer instructions from user data. Pass user input via distinct role='user' messages or parameter inputs rather than interpolating directly into system prompts.")
+                        flagged = True
+                        break
+                elif kw.arg == "template":
+                    if isinstance(kw.value, (ast.JoinedStr, ast.BinOp)):
+                        self._add(node, "MP038", Severity.CRITICAL.value,
+                                  "LLM prompt injection risk: dynamic string interpolation into PromptTemplate definition",
+                                  "Define static prompt templates with variables ({input}) rather than embedding runtime f-strings into template strings.")
+                        flagged = True
+                        break
+                elif kw.arg == "messages" and isinstance(kw.value, ast.List):
+                    for elt in kw.value.elts:
+                        if isinstance(elt, ast.Dict):
+                            role_val = None
+                            content_val = None
+                            for k, v in zip(elt.keys, elt.values):
+                                if isinstance(k, ast.Constant) and k.value in ("role", "name"):
+                                    if isinstance(v, ast.Constant):
+                                        role_val = v.value
+                                elif isinstance(k, ast.Constant) and k.value == "content":
+                                    content_val = v
+                            if role_val in ("system", "developer") and content_val:
+                                if isinstance(content_val, (ast.JoinedStr, ast.BinOp)) or (
+                                    isinstance(content_val, ast.Call) and isinstance(content_val.func, ast.Attribute) and content_val.func.attr == "format"
+                                ):
+                                    self._add(node, "MP038", Severity.CRITICAL.value,
+                                              "LLM prompt injection risk: dynamic string interpolation into system message content",
+                                              "Do not interpolate untrusted input into system or developer role messages. Use isolated user messages with clear delimiters.")
+                                    flagged = True
+                                    break
+                    if flagged:
+                        break
+
+            if not flagged and (func_name in ("from_template", "from_messages") or method == "from_template") and node.args:
+                arg0 = node.args[0]
+                if isinstance(arg0, (ast.JoinedStr, ast.BinOp)):
+                    self._add(node, "MP038", Severity.CRITICAL.value,
+                              "LLM prompt injection risk: dynamic string interpolation into PromptTemplate definition",
+                              "Define static prompt templates with input variables rather than interpolating runtime f-strings into prompt templates.")
+
+        # MP039 — Insecure ML / Object Deserialization via joblib.load or cloudpickle
+        elif (
+            (obj == "joblib" and method in ("load", "load_build"))
+            or full_func in ("joblib.load", "joblib.load_build")
+            or (obj == "cloudpickle" and method in ("load", "loads"))
+            or full_func in ("cloudpickle.load", "cloudpickle.loads")
+        ):
+            self._add(node, "MP039", Severity.HIGH.value,
+                      f"Insecure deserialization: {obj}.{method}() executes arbitrary code when deserializing untrusted data",
+                      "Do not load models or pickled objects from untrusted sources with joblib/cloudpickle. Use safe formats like Safetensors or ONNX.")
+
+        # MP040 — Subshell command execution via os.popen or asyncio.create_subprocess_shell
+        elif (
+            (obj == "os" and method == "popen")
+            or full_func in ("os.popen",)
+            or (obj in ("asyncio", "asyncio.subprocess") and method == "create_subprocess_shell")
+            or full_func in ("asyncio.create_subprocess_shell", "asyncio.subprocess.create_subprocess_shell")
+            or func_name == "create_subprocess_shell"
+        ):
+            self._add(node, "MP040", Severity.HIGH.value,
+                      f"Subshell execution via {obj or func_name}.{method if obj else func_name}() runs commands inside a system shell — command injection vulnerability",
+                      "Use subprocess.run() or asyncio.create_subprocess_exec() with an argument list rather than executing commands in a subshell.")
 
         self._extra_call_checks(node)
         self.generic_visit(node)

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-29
+
+### Added
+- **Terraform & OpenTofu Infrastructure-as-Code (IaC) Scanner** (`--only tf`, `--only terraform`, or `--only iac`):
+  - Zero-dependency static analysis engine for `.tf` and `.tfvars` files across AWS, GCP, and Azure cloud resources.
+  - Eight dedicated IaC security rules (`TF001–TF008`):
+    - **TF001** (HIGH): Security group ingress allowing open `0.0.0.0/0` on sensitive management and database ports (SSH 22, RDP 3389, Postgres 5432, MySQL 3306, MongoDB 27017, Redis 6379, etc.).
+    - **TF002** (CRITICAL): Overly permissive IAM policy document granting full wildcard permissions (`Action: *`, `Resource: *`).
+    - **TF003** (HIGH): S3 bucket or storage configured with public-read or public-read-write ACLs.
+    - **TF004** (HIGH): Unencrypted database or storage volume (`storage_encrypted = false` / `encrypted = false`).
+    - **TF005** (CRITICAL): Publicly accessible database instance (`publicly_accessible = true`).
+    - **TF006** (MEDIUM): S3 Public Access Block protection explicitly disabled.
+    - **TF007** (HIGH): Hardcoded plaintext credentials or secret keys in Terraform configurations.
+    - **TF008** (HIGH): Cloud storage container or bucket configured with anonymous public access (`allUsers`, `container`, `blob`).
+  - Supports inline comment suppression via `# maunprekshak: ignore[TFxxx]` and `# nosec`.
+- **Five New SAST Security Rules (MP036–MP040)**:
+  - **MP036** (HIGH): Unsafe YAML deserialization via `yaml.unsafe_load()` or explicit `Loader=yaml.Loader` / `UnsafeLoader` / `CLoader`.
+  - **MP037** (HIGH): Blind SSRF in `httpx` and `aiohttp` outbound HTTP requests with dynamic unvalidated URLs.
+  - **MP038** (CRITICAL): LLM Prompt Injection vector — dynamic f-string or `.format()` interpolation into system prompt / developer instruction context in OpenAI, Anthropic, Gemini, or LangChain call signatures.
+  - **MP039** (HIGH): Insecure ML / Object deserialization via `joblib.load()` or `cloudpickle.load()` with untrusted model artifacts.
+  - **MP040** (HIGH): Subshell command execution via `os.popen()` or `asyncio.create_subprocess_shell()` resulting in command injection vulnerabilities.
+- **Modern Cloud & Developer Secret Detectors**:
+  - Added native high-fidelity detection for PyPI API tokens (`pypi-...`), NPM access tokens (`npm_...`), OpenAI project keys (`sk-proj-...`), Anthropic admin keys (`sk-ant-admin...`), Postman API keys (`PMAK-...`), and Supabase service/anon tokens (`sbp_...`).
+- **SonarQube & Code Climate CI/CD Report Exports**:
+  - `--output sonarqube` (`--output-file sonar-issues.json`): Official SonarQube Generic Issue Import format for ingestion via `sonar.externalIssuesReportPaths`.
+  - `--output codeclimate` (`--output-file codeclimate.json`): Official Code Climate issue format compatible with GitLab Code Quality, Code Climate CLI, and GitHub Code Scanning.
+
 ## [0.10.2] - 2026-09-26
 
 ### Fixed & Enhanced

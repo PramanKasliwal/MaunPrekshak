@@ -21,13 +21,17 @@ PATTERNS = {
     "SSH Private Key": r"-----BEGIN OPENSSH PRIVATE KEY-----",
     "RSA Private Key": r"-----BEGIN RSA PRIVATE KEY-----",
     "JWT Secret": r"(?i)(jwt_secret|jwt_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]",
-    "OpenAI API Key": r"(?i)(?:sk-[A-Za-z0-9]{48}|sk-proj-[A-Za-z0-9_\-]{80,})",
-    "Anthropic API Key": r"(?i)sk-ant-[A-Za-z0-9_\-]{80,}",
+    "OpenAI API Key": r"(?i)(?:sk-[A-Za-z0-9]{48}|sk-proj-[A-Za-z0-9_\-]{40,})",
+    "Anthropic API Key": r"(?i)sk-ant-(?:admin|api)?[A-Za-z0-9_\-]{32,}",
     "HuggingFace Token": r"hf_[A-Za-z0-9]{34}",
     "GitLab Personal Access Token": r"(?i)glpat-[0-9a-zA-Z_\-]{20,}",
     "GitHub Fine-Grained PAT": r"github_pat_[0-9a-zA-Z_]{82}",
     "Discord Bot Token": r"(?i)(?:bot\s+)?[MN][A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,39}",
     "HashiCorp Vault Token": r"(?i)(?:hvs\.[a-zA-Z0-9_-]{24,}|s\.[a-zA-Z0-9]{24,})",
+    "PyPI API Token": r"\bpypi-[A-Za-z0-9_\-]{50,150}\b",
+    "NPM Access Token": r"\b(?:npm_[A-Za-z0-9]{36})\b",
+    "Postman API Key": r"\bPMAK-[0-9a-fA-F]{24}-[0-9a-fA-F]{34}\b",
+    "Supabase Key": r"\bsbp_[0-9a-zA-Z_]{40,}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

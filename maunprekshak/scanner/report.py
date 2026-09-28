@@ -751,6 +751,210 @@ def to_gitlab(scan_result: ScanResult, project_root: str = ".") -> str:
     return json.dumps(report, indent=2)
 
 
+def to_sonarqube(scan_result: ScanResult, project_root: str = ".") -> str:
+    """
+    Generate SonarQube Generic Issue Import JSON (sonar-issues.json).
+    Converts MaunPrekshak findings into SonarQube generic issue format
+    compatible with sonar.externalIssuesReportPaths.
+    """
+    root = os.path.abspath(project_root)
+
+    def _relpath(p: str) -> str:
+        try:
+            rel = os.path.relpath(os.path.abspath(p), root)
+            return rel.replace("\\", "/") if not rel.startswith("..") else os.path.basename(p)
+        except Exception:
+            return os.path.basename(p)
+
+    severity_map = {
+        "CRITICAL": "BLOCKER",
+        "HIGH": "CRITICAL",
+        "MEDIUM": "MAJOR",
+        "LOW": "MINOR",
+    }
+    effort_map = {
+        "CRITICAL": 30,
+        "HIGH": 20,
+        "MEDIUM": 10,
+        "LOW": 5,
+    }
+
+    issues = []
+
+    # SAST findings
+    for s in scan_result.sast:
+        sev = s.severity.upper()
+        line = max(1, s.line)
+        issues.append({
+            "engineId": "maunprekshak",
+            "ruleId": s.check_id,
+            "severity": severity_map.get(sev, "MAJOR"),
+            "type": "VULNERABILITY",
+            "primaryLocation": {
+                "message": f"{s.description}. {s.recommendation}".strip(),
+                "filePath": _relpath(s.file_path),
+                "textRange": {
+                    "startLine": line,
+                    "endLine": line,
+                },
+            },
+            "effortMinutes": effort_map.get(sev, 10),
+        })
+
+    # Secrets findings
+    for sec in scan_result.secrets:
+        line = max(1, sec.line)
+        rule_slug = f"SECRET-{re.sub(r'[^A-Z0-9]', '_', sec.secret_type.upper()).strip('_')}"
+        issues.append({
+            "engineId": "maunprekshak",
+            "ruleId": rule_slug,
+            "severity": "BLOCKER",
+            "type": "VULNERABILITY",
+            "primaryLocation": {
+                "message": f"Hardcoded credential detected ({sec.secret_type}): {sec.masked_value}",
+                "filePath": _relpath(sec.file_path),
+                "textRange": {
+                    "startLine": line,
+                    "endLine": line,
+                },
+            },
+            "effortMinutes": 20,
+        })
+
+    # Dependency CVEs
+    for dep in scan_result.deps:
+        sev = dep.severity.upper()
+        issues.append({
+            "engineId": "maunprekshak",
+            "ruleId": dep.cve_id,
+            "severity": severity_map.get(sev, "CRITICAL"),
+            "type": "VULNERABILITY",
+            "primaryLocation": {
+                "message": f"Vulnerable dependency {dep.package}@{dep.version} ({dep.cve_id}): {dep.description}. Fix: {dep.fix_version or 'Upgrade package'}",
+                "filePath": "requirements.txt",
+                "textRange": {
+                    "startLine": 1,
+                    "endLine": 1,
+                },
+            },
+            "effortMinutes": 15,
+        })
+
+    return json.dumps({"issues": issues}, indent=2)
+
+
+def to_codeclimate(scan_result: ScanResult, project_root: str = ".") -> str:
+    """
+    Generate Code Climate JSON report.
+    Compatible with Code Climate CLI, GitLab Code Quality, and GitHub Code Quality tools.
+    """
+    import hashlib
+    root = os.path.abspath(project_root)
+
+    def _relpath(p: str) -> str:
+        try:
+            rel = os.path.relpath(os.path.abspath(p), root)
+            return rel.replace("\\", "/") if not rel.startswith("..") else os.path.basename(p)
+        except Exception:
+            return os.path.basename(p)
+
+    severity_map = {
+        "CRITICAL": "blocker",
+        "HIGH": "critical",
+        "MEDIUM": "major",
+        "LOW": "minor",
+    }
+    remediation_map = {
+        "CRITICAL": 100000,
+        "HIGH": 50000,
+        "MEDIUM": 20000,
+        "LOW": 10000,
+    }
+
+    issues = []
+
+    # SAST findings
+    for s in scan_result.sast:
+        rel_path = _relpath(s.file_path)
+        line = max(1, s.line)
+        fingerprint_src = f"{s.check_id}:{rel_path}:{line}:{s.description}"
+        fingerprint = hashlib.sha256(fingerprint_src.encode("utf-8")).hexdigest()
+        issues.append({
+            "type": "issue",
+            "check_name": s.check_id,
+            "description": s.description,
+            "content": {
+                "body": f"Recommendation: {s.recommendation}",
+            },
+            "categories": ["Security"],
+            "location": {
+                "path": rel_path,
+                "lines": {
+                    "begin": line,
+                    "end": line,
+                },
+            },
+            "severity": severity_map.get(s.severity.upper(), "major"),
+            "remediation_points": remediation_map.get(s.severity.upper(), 20000),
+            "fingerprint": fingerprint,
+        })
+
+    # Secrets findings
+    for sec in scan_result.secrets:
+        rel_path = _relpath(sec.file_path)
+        line = max(1, sec.line)
+        check_name = f"SECRET-{re.sub(r'[^A-Z0-9]', '_', sec.secret_type.upper()).strip('_')}"
+        desc = f"Hardcoded credential detected: {sec.secret_type}"
+        fingerprint_src = f"{check_name}:{rel_path}:{line}:{sec.masked_value}"
+        fingerprint = hashlib.sha256(fingerprint_src.encode("utf-8")).hexdigest()
+        issues.append({
+            "type": "issue",
+            "check_name": check_name,
+            "description": desc,
+            "content": {
+                "body": f"Remove the exposed {sec.secret_type} ({sec.masked_value}) from source code and load via environment variables or secret manager.",
+            },
+            "categories": ["Security"],
+            "location": {
+                "path": rel_path,
+                "lines": {
+                    "begin": line,
+                    "end": line,
+                },
+            },
+            "severity": "blocker",
+            "remediation_points": 50000,
+            "fingerprint": fingerprint,
+        })
+
+    # Dependency CVEs
+    for dep in scan_result.deps:
+        desc = f"Vulnerable dependency: {dep.package}@{dep.version} ({dep.cve_id})"
+        fingerprint_src = f"{dep.cve_id}:{dep.package}:{dep.version}"
+        fingerprint = hashlib.sha256(fingerprint_src.encode("utf-8")).hexdigest()
+        issues.append({
+            "type": "issue",
+            "check_name": dep.cve_id,
+            "description": desc,
+            "content": {
+                "body": f"{dep.description}\n\nRemediation: Upgrade {dep.package} to {dep.fix_version or 'latest safe release'}.",
+            },
+            "categories": ["Security"],
+            "location": {
+                "path": "requirements.txt",
+                "lines": {
+                    "begin": 1,
+                    "end": 1,
+                },
+            },
+            "severity": severity_map.get(dep.severity.upper(), "critical"),
+            "remediation_points": remediation_map.get(dep.severity.upper(), 50000),
+            "fingerprint": fingerprint,
+        })
+
+    return json.dumps(issues, indent=2)
+
+
 def format_github_annotations(scan_result: ScanResult, project_root: str = ".") -> str:
     """
     Format scan findings as GitHub Actions workflow commands for PR annotations.

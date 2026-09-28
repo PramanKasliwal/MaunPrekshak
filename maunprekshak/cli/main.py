@@ -22,6 +22,8 @@ from maunprekshak.scanner.report import (
     to_spdx,
     to_html,
     to_gitlab,
+    to_sonarqube,
+    to_codeclimate,
     format_github_annotations,
     generate_ai_summary,
     aggregate,
@@ -93,8 +95,8 @@ def _normalize_excludes(raw_excludes) -> List[str]:
 @app.command()
 def scan(
     path: str = typer.Argument(".", help="Path to project or directory to scan"),
-    only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast, k8s"),
-    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx, html, gitlab"),
+    only: Optional[str] = typer.Option(None, help="Run only: deps, secrets, sast, k8s, tf (or terraform/iac)"),
+    output: str = typer.Option("console", help="Output format: console, json, markdown, pdf, sarif, cyclonedx, spdx, html, gitlab, sonarqube, codeclimate"),
     output_file: Optional[str] = typer.Option(None, help="Save output to this file path"),
     ci: bool = typer.Option(False, help="CI mode: compact output, non-zero exit on threshold breach"),
     fail_on: Optional[str] = typer.Option(None, help="Fail CI if severity reached: critical, high, medium, low"),
@@ -300,6 +302,20 @@ def scan(
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(out_str)
         console.print(f"[bold green]Saved GitLab SAST report to {out_path}[/bold green]")
+    elif output == "sonarqube":
+        out_str = to_sonarqube(result, project_root=path)
+        default_name = "sonar-issues.json"
+        out_path = output_file or default_name
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(out_str)
+        console.print(f"[bold green]Saved SonarQube issues report to {out_path}[/bold green]")
+    elif output == "codeclimate":
+        out_str = to_codeclimate(result, project_root=path)
+        default_name = "codeclimate.json"
+        out_path = output_file or default_name
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(out_str)
+        console.print(f"[bold green]Saved Code Climate report to {out_path}[/bold green]")
     elif output == "pdf" and output_file:
         to_pdf(result, output_file)
         console.print(f"[bold green]Saved PDF to {output_file}[/bold green]")
