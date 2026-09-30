@@ -51,6 +51,14 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP038  LLM prompt injection vector   CRITICAL
 # MP039  joblib/cloudpickle load       HIGH
 # MP040  os.popen/asyncio shell exec   HIGH
+# MP041  CORS wildcard with credentials HIGH
+# MP042  Open redirect vulnerability   MEDIUM
+# MP043  Insecure JWT validation       HIGH
+# MP044  Disabled CSRF protection      MEDIUM
+# MP045  Path traversal in file download HIGH
+# MP046  Mass assignment via **kwargs  HIGH
+# MP047  GraphQL schema introspection  LOW
+# MP048  Host header injection         MEDIUM
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -109,6 +117,44 @@ class SecurityVisitor(ast.NodeVisitor):
         if isinstance(curr, ast.Name):
             parts.append(curr.id)
         return ".".join(reversed(parts))
+
+    def _is_request_source(self, node: ast.AST) -> bool:
+        """Check if an AST node directly accesses user-controlled HTTP request data."""
+        if isinstance(node, ast.Call):
+            full_name = self._get_full_func_name(node)
+            if any(full_name.startswith(p) for p in (
+                "request.args.", "request.GET.", "request.POST.", "request.query_params.",
+                "request.values.", "request.form.", "request.json.", "request.get_json"
+            )):
+                return True
+            if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
+                parent = node.func.value
+                if isinstance(parent.value, ast.Name) and parent.value.id == "request":
+                    return True
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Attribute):
+                if isinstance(node.value.value, ast.Name) and node.value.value.id == "request":
+                    return True
+        elif isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id == "request":
+                return True
+        return False
+
+    def _is_host_header_source(self, node: ast.AST) -> bool:
+        """Check if an AST node retrieves the HTTP Host header."""
+        if isinstance(node, ast.Attribute):
+            if node.attr == "host" and isinstance(node.value, ast.Name) and node.value.id == "request":
+                return True
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Attribute) and node.value.attr == "headers":
+                if isinstance(node.slice, ast.Constant) and str(node.slice.value).lower() == "host":
+                    return True
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+                if isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "headers":
+                    if node.args and isinstance(node.args[0], ast.Constant) and str(node.args[0].value).lower() == "host":
+                        return True
+        return False
 
     # ── Visitors ──────────────────────────────────────────────────────────────
 
@@ -630,6 +676,139 @@ class SecurityVisitor(ast.NodeVisitor):
                                   f"os.chmod() sets fully permissive mode {oct(arg1.value)} (world-readable, writable, and executable)",
                                   "Use restrictive permissions: 0o600 for private files, 0o644 for readable files, 0o700 for private executables.")
 
+        # MP041 — CORS Wildcard with Credentials
+        if method == "add_middleware" or full_func.endswith("add_middleware"):
+            is_cors = False
+            if node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "CORSMiddleware":
+                is_cors = True
+            for kw in node.keywords:
+                if kw.arg == "middleware" and isinstance(kw.value, ast.Name) and kw.value.id == "CORSMiddleware":
+                    is_cors = True
+            if is_cors:
+                has_wildcard = False
+                has_creds = False
+                for kw in node.keywords:
+                    if kw.arg in ("allow_origins", "allow_origin_regex"):
+                        if isinstance(kw.value, ast.Constant) and kw.value.value in ("*", ".*"):
+                            has_wildcard = True
+                        elif isinstance(kw.value, ast.List):
+                            for elt in kw.value.elts:
+                                if isinstance(elt, ast.Constant) and elt.value in ("*", ".*"):
+                                    has_wildcard = True
+                    elif kw.arg in ("allow_credentials", "supports_credentials"):
+                        if isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                            has_creds = True
+                if has_wildcard and has_creds:
+                    self._add(node, "MP041", Severity.HIGH.value,
+                              "CORS misconfiguration: wildcard origin '*' paired with credentials enabled (allow_credentials=True)",
+                              "Do not enable credentials when allow_origins is ['*']. Explicitly specify trusted origin domains.")
+        elif func_name == "CORS" or full_func in ("flask_cors.CORS", "CORS"):
+            has_wildcard = False
+            has_creds = False
+            for kw in node.keywords:
+                if kw.arg in ("origins", "resources"):
+                    if isinstance(kw.value, ast.Constant) and kw.value.value == "*":
+                        has_wildcard = True
+                    elif isinstance(kw.value, ast.List):
+                        for elt in kw.value.elts:
+                            if isinstance(elt, ast.Constant) and elt.value == "*":
+                                has_wildcard = True
+                elif kw.arg == "supports_credentials" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    has_creds = True
+            if has_wildcard and has_creds:
+                self._add(node, "MP041", Severity.HIGH.value,
+                          "Flask-CORS misconfiguration: wildcard origins paired with supports_credentials=True",
+                          "Specify explicit trusted domain origins instead of '*' when supports_credentials=True.")
+
+        # MP042 — Open Redirect
+        if func_name in ("redirect", "HttpResponseRedirect", "HttpResponsePermanentRedirect", "RedirectResponse") or (
+            method in ("redirect",)
+        ):
+            target_node = None
+            if node.args:
+                target_node = node.args[0]
+            else:
+                for kw in node.keywords:
+                    if kw.arg in ("url", "to", "location"):
+                        target_node = kw.value
+                        break
+            if target_node and self._is_request_source(target_node):
+                self._add(node, "MP042", Severity.MEDIUM.value,
+                          f"Open redirect vulnerability: {func_name or method}() called with untrusted user request parameter",
+                          "Validate redirect targets against an allowlist of trusted domains or relative URLs before redirecting.")
+
+        # MP043 — Insecure JWT validation ('none' algorithm / disabled verification options)
+        if (obj == "jwt" and method == "decode") or full_func in ("jwt.decode", "jose.jwt.decode"):
+            for kw in node.keywords:
+                if kw.arg == "algorithms":
+                    has_none = False
+                    if isinstance(kw.value, ast.List):
+                        for elt in kw.value.elts:
+                            if isinstance(elt, ast.Constant) and str(elt.value).lower() == "none":
+                                has_none = True
+                    elif isinstance(kw.value, ast.Constant) and str(kw.value.value).lower() == "none":
+                        has_none = True
+                    if has_none:
+                        self._add(node, "MP043", Severity.HIGH.value,
+                                  "Insecure JWT decoding: 'none' algorithm explicitly permitted",
+                                  "Never allow the 'none' algorithm in JWT decode. Enforce strong cryptographic algorithms like HS256 or RS256.")
+                elif kw.arg == "options" and isinstance(kw.value, ast.Dict):
+                    for k, v in zip(kw.value.keys, kw.value.values):
+                        if isinstance(k, ast.Constant) and k.value in ("verify_signature", "verify_exp"):
+                            if isinstance(v, ast.Constant) and v.value is False:
+                                self._add(node, "MP043", Severity.HIGH.value,
+                                          f"Insecure JWT decoding: options['{k.value}'] is disabled (False)",
+                                          "Always verify JWT signatures and expiration to prevent forged tokens.")
+
+        # MP045 — Path Traversal in File Serving / Downloads
+        if func_name in ("send_file", "FileResponse") or (obj in ("flask", "fastapi", "responses") and method in ("send_file", "FileResponse")):
+            target_arg = node.args[0] if node.args else None
+            if not target_arg:
+                for kw in node.keywords:
+                    if kw.arg in ("path", "filename_or_fp", "filename"):
+                        target_arg = kw.value
+                        break
+            if target_arg:
+                has_req = self._is_request_source(target_arg)
+                if not has_req and isinstance(target_arg, ast.Call):
+                    for sub_arg in target_arg.args:
+                        if self._is_request_source(sub_arg):
+                            has_req = True
+                            break
+                if has_req:
+                    self._add(node, "MP045", Severity.HIGH.value,
+                              f"Path traversal risk in file serving: untrusted request parameter passed to {func_name or method}()",
+                              "Use framework safe file serving mechanisms (e.g. send_from_directory) or canonicalize and verify path boundaries using os.path.realpath().")
+
+        # MP046 — Mass assignment via request dictionary unpacking
+        for kw in node.keywords:
+            if kw.arg is None:  # **kwargs unpacking
+                is_untrusted_dict = self._is_request_source(kw.value) or (
+                    isinstance(kw.value, ast.Attribute) and kw.value.attr in ("json", "form", "data") and isinstance(kw.value.value, ast.Name) and kw.value.value.id == "request"
+                ) or (
+                    isinstance(kw.value, ast.Call) and isinstance(kw.value.func, ast.Attribute) and kw.value.func.attr == "get_json" and isinstance(kw.value.func.value, ast.Name) and kw.value.func.value.id == "request"
+                )
+                if is_untrusted_dict:
+                    self._add(node, "MP046", Severity.HIGH.value,
+                              f"Mass assignment risk: unpacking untrusted request payload via **kwargs into {func_name or method or 'callable'}()",
+                              "Avoid unpacking raw request payloads directly into models. Explicitly map permitted fields or validate schemas with Pydantic.")
+
+        # MP047 — GraphQL Introspection
+        if func_name in ("GraphQLView", "Schema") or method in ("as_view",):
+            for kw in node.keywords:
+                if kw.arg == "introspection" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    self._add(node, "MP047", Severity.LOW.value,
+                              "GraphQL schema introspection explicitly enabled (introspection=True)",
+                              "Disable GraphQL introspection in production environments to avoid leaking full schema metadata.")
+
+        # MP048 — Host Header Injection in URL construction
+        if func_name in ("urljoin", "url_for") and node.args:
+            for arg in node.args:
+                if self._is_host_header_source(arg):
+                    self._add(node, "MP048", Severity.MEDIUM.value,
+                              "Host Header Injection: using untrusted request host to construct URLs",
+                              "Avoid using HTTP Host headers for URL or reset link generation. Use server-configured domains.")
+
     def visit_Assert(self, node: ast.Assert) -> None:
         """MP010 — assert used for security checks (stripped in optimized mode)."""
         # Skip assert statements in test files (tests use assertions legitimately)
@@ -649,7 +828,7 @@ class SecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        """MP011 — Detect DEBUG = True assignments."""
+        """MP011 / MP047 — Detect DEBUG = True and GRAPHQL_INTROSPECTION = True assignments."""
         for target in node.targets:
             if isinstance(target, ast.Name) and target.id == "DEBUG":
                 if isinstance(node.value, ast.Constant) and node.value.value is True:
@@ -657,6 +836,57 @@ class SecurityVisitor(ast.NodeVisitor):
                               "DEBUG = True detected — ensure this is not in production configuration",
                               "Use environment variables to control debug mode: "
                               "DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'.")
+            elif isinstance(target, ast.Name) and target.id in ("GRAPHQL_INTROSPECTION", "INTROSPECTION_ENABLED"):
+                if isinstance(node.value, ast.Constant) and node.value.value is True:
+                    self._add(node, "MP047", Severity.LOW.value,
+                              f"{target.id} = True detected — GraphQL introspection enabled",
+                              "Disable GraphQL schema introspection in production environments.")
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """MP044 — Missing/Disabled CSRF Protection."""
+        self._check_csrf_decorator(node)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        """MP044 — Missing/Disabled CSRF Protection (async)."""
+        self._check_csrf_decorator(node)
+        self.generic_visit(node)
+
+    def _check_csrf_decorator(self, node) -> None:
+        for dec in node.decorator_list:
+            dec_name = ""
+            if isinstance(dec, ast.Name):
+                dec_name = dec.id
+            elif isinstance(dec, ast.Attribute):
+                if isinstance(dec.value, ast.Name):
+                    dec_name = f"{dec.value.id}.{dec.attr}"
+                else:
+                    dec_name = dec.attr
+            elif isinstance(dec, ast.Call):
+                if isinstance(dec.func, ast.Name):
+                    dec_name = dec.func.id
+                elif isinstance(dec.func, ast.Attribute):
+                    dec_name = dec.func.attr
+            if dec_name in ("csrf_exempt", "csrf.exempt"):
+                self._add(node, "MP044", Severity.MEDIUM.value,
+                          "CSRF protection explicitly disabled via @csrf_exempt decorator",
+                          "Do not disable CSRF protection on endpoints that authenticate via session cookies. Limit @csrf_exempt to pure token/API endpoints.")
+
+    def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+        """MP048 — Check f-strings constructing URLs with request host header."""
+        is_url_template = False
+        for val in node.values:
+            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                if "http://" in val.value or "https://" in val.value:
+                    is_url_template = True
+                    break
+        if is_url_template:
+            for val in node.values:
+                if isinstance(val, ast.FormattedValue) and self._is_host_header_source(val.value):
+                    self._add(node, "MP048", Severity.MEDIUM.value,
+                              "Host Header Injection: constructing URL using request host/headers in f-string",
+                              "Do not trust request host headers when creating absolute URLs or password reset links. Use server-configured domain settings.")
         self.generic_visit(node)
 
 

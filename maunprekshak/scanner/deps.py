@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tomllib
+import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional
 
 import httpx
@@ -410,6 +411,163 @@ def parse_cargo_lock(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_pom_xml(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Maven pom.xml file and extract dependencies as (group:artifact, version).
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+
+        properties: Dict[str, str] = {}
+        for child in root:
+            tag = child.tag.split("}")[-1]
+            if tag == "properties":
+                for prop in child:
+                    ptag = prop.tag.split("}")[-1]
+                    pval = (prop.text or "").strip()
+                    if ptag and pval:
+                        properties[ptag] = pval
+
+        for elem in root.iter():
+            if elem.tag.split("}")[-1] == "dependency":
+                group = ""
+                artifact = ""
+                version = ""
+                for child in elem:
+                    ctag = child.tag.split("}")[-1]
+                    ctext = (child.text or "").strip()
+                    if ctag == "groupId":
+                        group = ctext
+                    elif ctag == "artifactId":
+                        artifact = ctext
+                    elif ctag == "version":
+                        version = ctext
+
+                if group and artifact:
+                    if version.startswith("${") and version.endswith("}"):
+                        prop_key = version[2:-1].strip()
+                        version = properties.get(prop_key, "")
+                    packages.append((f"{group}:{artifact}", version))
+    except Exception:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            pattern = re.compile(
+                r"<dependency>[\s\S]*?<groupId>([^<]+)</groupId>[\s\S]*?<artifactId>([^<]+)</artifactId>(?:[\s\S]*?<version>([^<]+)</version>)?[\s\S]*?</dependency>",
+                re.IGNORECASE,
+            )
+            for m in pattern.finditer(content):
+                grp = m.group(1).strip()
+                art = m.group(2).strip()
+                ver = (m.group(3) or "").strip()
+                if not ver.startswith("${"):
+                    packages.append((f"{grp}:{art}", ver))
+                else:
+                    packages.append((f"{grp}:{art}", ""))
+        except Exception:
+            pass
+    return packages
+
+
+def parse_gradle_file(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse build.gradle or build.gradle.kts and extract dependencies.
+    Matches string notation ('group:name:version') and map notation (group: '...', name: '...', version: '...').
+    """
+    packages: List[tuple[str, str]] = []
+    str_pattern = re.compile(
+        r"""(?:implementation|api|compileOnly|runtimeOnly|testImplementation|classpath)\s*\(?\s*['"]([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.\+]+)['"]\s*\)?""",
+        re.IGNORECASE,
+    )
+    map_pattern = re.compile(
+        r"""group:\s*['"]([^'"]+)['"],\s*name:\s*['"]([^'"]+)['"](?:,\s*version:\s*['"]([^'"]+)['"])?""",
+        re.IGNORECASE,
+    )
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith(("//", "/*", "*")):
+                    continue
+                m1 = str_pattern.search(line)
+                if m1:
+                    packages.append((f"{m1.group(1)}:{m1.group(2)}", m1.group(3)))
+                    continue
+                m2 = map_pattern.search(line)
+                if m2:
+                    packages.append((f"{m2.group(1)}:{m2.group(2)}", m2.group(3) or ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_gradle_lockfile(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse gradle.lockfile and extract pinned group:artifact:version coordinates.
+    Lines follow: org.springframework:spring-core:5.3.18=compileClasspath,runtimeClasspath
+    """
+    packages: List[tuple[str, str]] = []
+    pattern = re.compile(r"^([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.\+]+)=")
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                m = pattern.match(line)
+                if m:
+                    packages.append((f"{m.group(1)}:{m.group(2)}", m.group(3)))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_composer_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a composer.lock file and extract pinned PHP packages and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+        for section in ("packages", "packages-dev"):
+            for item in data.get(section, []):
+                if isinstance(item, dict):
+                    name = str(item.get("name", "")).strip()
+                    ver = str(item.get("version", "")).strip()
+                    clean_ver = ver.lstrip("v").strip()
+                    if name and clean_ver:
+                        packages.append((name.lower(), clean_ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_composer_json(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a composer.json file and extract direct dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+        for section in ("require", "require-dev"):
+            for pkg, ver_spec in data.get(section, {}).items():
+                pkg_name = str(pkg).strip()
+                if pkg_name.lower() == "php" or pkg_name.startswith("ext-") or pkg_name == "composer-plugin-api":
+                    continue
+                ver_clean = re.sub(r"^[=><~^v\s]+", "", str(ver_spec)).strip()
+                if ver_clean and re.match(r"^\d", ver_clean):
+                    packages.append((pkg_name.lower(), ver_clean))
+                else:
+                    packages.append((pkg_name.lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
 
 # ─── OSV.dev API ──────────────────────────────────────────────────────────────
 
@@ -517,6 +675,9 @@ async def scan_dependencies(
     Looks for Python manifests: poetry.lock, Pipfile.lock, uv.lock, requirements.txt, pyproject.toml, Pipfile
     Looks for JavaScript/npm manifests: package-lock.json, yarn.lock, pnpm-lock.yaml, package.json
     Looks for Go manifests: go.sum, go.mod
+    Looks for Rust manifests: Cargo.lock, Cargo.toml
+    Looks for Java manifests: pom.xml, build.gradle, build.gradle.kts, gradle.lockfile
+    Looks for PHP manifests: composer.lock, composer.json
 
     Args:
         path: Absolute path to the project root directory.
@@ -529,6 +690,8 @@ async def scan_dependencies(
     npm_packages: Dict[str, str] = {}
     go_packages: Dict[str, str] = {}
     cargo_packages: Dict[str, str] = {}
+    maven_packages: Dict[str, str] = {}
+    packagist_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -551,6 +714,16 @@ async def scan_dependencies(
     cargo_parsers = [
         ("Cargo.lock", parse_cargo_lock),
         ("Cargo.toml", parse_cargo_toml),
+    ]
+    maven_parsers = [
+        ("pom.xml", parse_pom_xml),
+        ("build.gradle", parse_gradle_file),
+        ("build.gradle.kts", parse_gradle_file),
+        ("gradle.lockfile", parse_gradle_lockfile),
+    ]
+    packagist_parsers = [
+        ("composer.lock", parse_composer_lock),
+        ("composer.json", parse_composer_json),
     ]
 
     for filename, parser in python_parsers:
@@ -613,7 +786,37 @@ async def scan_dependencies(
                 if pkg not in cargo_packages or (ver and not cargo_packages[pkg]):
                     cargo_packages[pkg] = ver
 
-    if not python_packages and not npm_packages and not go_packages and not cargo_packages:
+    for filename, parser in maven_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in maven_packages or (ver and not maven_packages[pkg]):
+                    maven_packages[pkg] = ver
+
+    for filename, parser in packagist_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in packagist_packages or (ver and not packagist_packages[pkg]):
+                    packagist_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -622,6 +825,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "npm") for pkg, ver in npm_packages.items()]
         + [_query_osv(pkg, ver, "Go") for pkg, ver in go_packages.items()]
         + [_query_osv(pkg, ver, "crates.io") for pkg, ver in cargo_packages.items()]
+        + [_query_osv(pkg, ver, "Maven") for pkg, ver in maven_packages.items()]
+        + [_query_osv(pkg, ver, "Packagist") for pkg, ver in packagist_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

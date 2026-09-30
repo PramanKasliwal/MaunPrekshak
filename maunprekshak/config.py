@@ -39,6 +39,8 @@ class ScannerConfig:
     rules_file: Optional[str] = None
     scan_history: bool = False
     commits: int = 50
+    notify_webhook: Optional[str] = None
+    notify_on: str = "fail"
 
 
 DEFAULT_CONFIG_TEMPLATE = """# MaunPrekshak Configuration File (.maunprekshak.toml)
@@ -82,6 +84,11 @@ provider = "auto"
 
 # Custom API base URL (optional, e.g. "http://localhost:11434/v1" or private enterprise gateway)
 # base_url = ""
+
+[notifications]
+# Webhook notification settings (Slack, Discord, or generic incoming webhook)
+# webhook = "https://hooks.slack.com/services/..."
+# notify_on = "fail"  # "fail" or "always"
 """
 
 
@@ -112,6 +119,7 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                     data = tomllib.load(f)
                 scanner_data = data.get("scanner", {})
                 ai_data = data.get("ai", {})
+                notifications_data = data.get("notifications", {})
                 default_ex = ScannerConfig().exclude
                 return ScannerConfig(
                     exclude=scanner_data.get("exclude", default_ex),
@@ -124,6 +132,8 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                     rules_file=scanner_data.get("rules_file", None),
                     scan_history=scanner_data.get("scan_history", False),
                     commits=scanner_data.get("commits", 50),
+                    notify_webhook=notifications_data.get("webhook", None) or os.getenv("MP_NOTIFY_WEBHOOK"),
+                    notify_on=notifications_data.get("notify_on", "fail"),
                 )
             except Exception:
                 pass
@@ -140,6 +150,7 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
             tool_data = data.get("tool", {}).get("maunprekshak", {})
             if tool_data:
                 ai_data = tool_data.get("ai", {})
+                notifications_data = tool_data.get("notifications", {})
                 default_ex = ScannerConfig().exclude
                 return ScannerConfig(
                     exclude=tool_data.get("exclude", default_ex),
@@ -152,8 +163,12 @@ def load_config(root_path: Optional[str] = None) -> ScannerConfig:
                     rules_file=tool_data.get("rules_file", None),
                     scan_history=tool_data.get("scan_history", False),
                     commits=tool_data.get("commits", 50),
+                    notify_webhook=notifications_data.get("webhook", None) or os.getenv("MP_NOTIFY_WEBHOOK"),
+                    notify_on=notifications_data.get("notify_on", "fail"),
                 )
         except Exception:
             pass
 
-    return ScannerConfig()
+    return ScannerConfig(
+        notify_webhook=os.getenv("MP_NOTIFY_WEBHOOK"),
+    )

@@ -32,6 +32,12 @@ PATTERNS = {
     "NPM Access Token": r"\b(?:npm_[A-Za-z0-9]{36})\b",
     "Postman API Key": r"\bPMAK-[0-9a-fA-F]{24}-[0-9a-fA-F]{34}\b",
     "Supabase Key": r"\bsbp_[0-9a-zA-Z_]{40,}\b",
+    "GCP Service Account Key": r'(?i)(?:"type"\s*:\s*"service_account"|"private_key"\s*:\s*"-----BEGIN (?:RSA )?PRIVATE KEY)',
+    "Azure Storage Connection String": r"DefaultEndpointsProtocol=https?;AccountName=[a-z0-9]+;AccountKey=[A-Za-z0-9+/=]{86,88}",
+    "Azure SAS Token": r"(?i)(?:sv=\d{4}-\d{2}-\d{2}[^\"'\s]*[?&]sig=[A-Za-z0-9%+/=]{40,}|sig=[A-Za-z0-9%+/=]{40,}(?:&se=|&sp=|&sr=)|SharedAccessSignature=sv=)",
+    "GitHub Copilot / App Token": r"\bgh[us]_[A-Za-z0-9]{36}\b",
+    "Kubernetes Service Account Token": r"(?i)bearer\s+eyJh[A-Za-z0-9_\-\.]{50,}",
+    "Databricks API Token": r"\bdapi[a-f0-9]{32}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

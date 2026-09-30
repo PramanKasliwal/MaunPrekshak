@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-10-01
+
+### Added
+- **Web, API & Microservices SAST Suite (`MP041`–`MP048`)**:
+  - Eight dedicated AST security rules targeting OWASP Top 10 API & Web security anti-patterns across FastAPI, Flask, Django, Starlette, and GraphQL:
+    - **MP041** (HIGH): CORS misconfiguration pairing wildcard origin `*` with credentials enabled (`allow_credentials=True` or `supports_credentials=True`).
+    - **MP042** (MEDIUM): Unvalidated open redirect vulnerabilities (`redirect(request.args.get('url'))`, `HttpResponseRedirect`, `RedirectResponse`).
+    - **MP043** (HIGH): Insecure JWT validation allowing the `"none"` algorithm or disabling signature/expiration verification.
+    - **MP044** (MEDIUM): CSRF protection explicitly disabled via `@csrf_exempt` or `@csrf.exempt` on state-changing endpoints.
+    - **MP045** (HIGH): Path traversal vulnerabilities in file serving/downloads (`send_file(os.path.join(..., request.args.get(...)))`, `FileResponse`).
+    - **MP046** (HIGH): Mass assignment / unrestricted dictionary unpacking of untrusted request payloads (`User(**request.json)`).
+    - **MP047** (LOW): GraphQL schema introspection explicitly enabled in production settings.
+    - **MP048** (MEDIUM): Untrusted HTTP Host header injection during URL and password reset link construction.
+- **Multi-Ecosystem Software Composition Analysis (SCA) for Java & PHP**:
+  - Native manifest parsing for Java: Maven (`pom.xml`), Gradle (`build.gradle`, `build.gradle.kts`), and Gradle lockfiles (`gradle.lockfile`).
+  - Native manifest parsing for PHP: Composer lockfiles (`composer.lock`) and definitions (`composer.json`).
+  - Concurrent asynchronous vulnerability querying against OSV.dev for `"Maven"` and `"Packagist"` ecosystems with CVSS scoring and minimum safe version resolution.
+- **Enterprise Cloud & DevOps Secrets Detection (`MP-SEC-021`–`MP-SEC-026`)**:
+  - High-confidence pattern matching for enterprise credentials:
+    - GCP Service Account JSON private key definitions (`"type": "service_account"`).
+    - Azure Storage Account connection strings (`DefaultEndpointsProtocol=https;...`).
+    - Azure Shared Access Signature (SAS) tokens with embedded signatures.
+    - GitHub Copilot and App User/Server tokens (`ghu_`, `ghs_`).
+    - Kubernetes Service Account bearer tokens (`bearer eyJh...`).
+    - Databricks Personal Access Tokens (`dapi...`).
+- **CI/CD Webhook & Alerting Engine (`--notify-webhook`)**:
+  - Added `--notify-webhook <url>` and `--notify-on <fail|always>` CLI flags and configuration options.
+  - Automatically formats and dispatches rich Slack Block Kit alerts, Discord embed messages, or structured generic JSON payloads upon scan completion or CI failure.
+
 ## [0.12.0] - 2026-09-30
 
 ### Added & Enhanced

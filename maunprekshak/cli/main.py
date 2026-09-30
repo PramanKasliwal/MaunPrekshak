@@ -29,6 +29,7 @@ from maunprekshak.scanner.report import (
     aggregate,
 )
 from maunprekshak.scanner.fixer import apply_auto_fixes, fix_requirements_txt
+from maunprekshak.scanner.notify import send_webhook_notification
 
 # Auto-load .env from the current directory or any parent directory
 load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
@@ -113,6 +114,8 @@ def scan(
     history: bool = typer.Option(False, "--history", help="Scan git commit history for leaked credentials"),
     commits: Optional[int] = typer.Option(None, "--commits", help="Maximum number of historical commits to scan (default: 50)"),
     annotations: bool = typer.Option(False, "--annotations", help="Emit GitHub Actions workflow annotation commands (::error:: / ::warning::) for inline PR annotations"),
+    notify_webhook: Optional[str] = typer.Option(None, "--notify-webhook", help="Webhook URL to dispatch scan alerts to (Slack, Discord, or generic JSON)"),
+    notify_on: Optional[str] = typer.Option(None, "--notify-on", help="Trigger condition for webhook: fail (default) or always"),
 ):
     """Scan a project for CVE dependencies, exposed secrets, and AST code vulnerabilities."""
     cfg = load_config(path)
@@ -129,6 +132,8 @@ def scan(
     effective_rules_file = rules_file or cfg.rules_file
     effective_history = history or cfg.scan_history
     effective_commits = commits if commits is not None else cfg.commits
+    effective_notify_webhook = notify_webhook or cfg.notify_webhook
+    effective_notify_on = notify_on or cfg.notify_on or "fail"
 
     target_files: Optional[List[str]] = None
     if staged:
@@ -345,18 +350,27 @@ def scan(
             if annotation_lines:
                 print(annotation_lines)
 
-    if ci:
-        severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-        threshold = severity_map.get(effective_fail_on.lower(), 4)
-        breached = sum(
-            severity_map.get(finding.severity.lower(), 0) >= threshold
-            for finding in result.deps + result.secrets + result.sast
+    severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+    threshold = severity_map.get((effective_fail_on or "critical").lower(), 4)
+    breached = sum(
+        severity_map.get(finding.severity.lower(), 0) >= threshold
+        for finding in result.deps + result.secrets + result.sast
+    )
+
+    if effective_notify_webhook:
+        send_webhook_notification(
+            effective_notify_webhook,
+            result,
+            status="failed" if breached > 0 else "passed",
+            trigger=effective_notify_on,
+            project_root=path,
         )
-        if breached:
-            console.print(
-                f"[bold red]CI Check Failed: {breached} finding(s) at or above {effective_fail_on.upper()}[/bold red]"
-            )
-            raise typer.Exit(code=1)
+
+    if ci and breached:
+        console.print(
+            f"[bold red]CI Check Failed: {breached} finding(s) at or above {effective_fail_on.upper()}[/bold red]"
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command()
