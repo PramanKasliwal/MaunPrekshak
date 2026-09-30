@@ -105,7 +105,7 @@ def scan(
     staged: bool = typer.Option(False, "--staged", help="Scan only git staged files (pre-commit mode)"),
     diff: Optional[str] = typer.Option(None, "--diff", help="Scan only git modified files against working tree or REF (e.g. HEAD~1)"),
     baseline: Optional[str] = typer.Option(None, "--baseline", help="Path to baseline JSON report to suppress existing findings"),
-    fix: bool = typer.Option(False, "--fix", help="Automatically patch safe SAST anti-patterns (MP012, MP023, MP014) and vulnerable requirements.txt entries"),
+    fix: bool = typer.Option(False, "--fix", help="Automatically patch safe security anti-patterns (Python SAST MP012/014/015/023/031/033/036, Terraform TF004/005/006, Dockerfile DF002) and vulnerable requirements.txt entries"),
     ai_provider: str = typer.Option("auto", "--ai-provider", help="AI provider: auto, gemini, openai, anthropic, ollama"),
     ai_model: Optional[str] = typer.Option(None, "--ai-model", help="AI model name (e.g. gpt-4o-mini, claude-3-5-haiku-20241022, gemini-2.5-flash, llama3.2)"),
     ai_base_url: Optional[str] = typer.Option(None, "--ai-base-url", help="Custom AI API base URL (e.g. http://localhost:11434/v1 or private gateway)"),

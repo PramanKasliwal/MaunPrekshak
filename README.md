@@ -151,9 +151,16 @@ mp scan . --rules-file .maunprekshak-rules.yaml
 ### Safe Mechanical Auto-Fixing (`--fix`)
 
 Automatically patch safe, deterministic anti-patterns without breaking application logic:
-- `MP012`: `yaml.load()` -> `yaml.safe_load()`
+- `MP012` & `MP036`: `yaml.load()` / `yaml.unsafe_load()` -> `yaml.safe_load()`, unsafe `Loader` -> `yaml.SafeLoader`
+- `MP031`: `torch.load()` -> `torch.load(..., weights_only=True)` (prevents arbitrary pickle execution)
 - `MP023`: `tar.extractall()` -> `tar.extractall(filter='data')` (prevents Zip Slip)
 - `MP014`: `tempfile.mktemp()` -> `tempfile.NamedTemporaryFile().name`
+- `MP015`: Insecure HTTP SSL verification `verify=False` -> `verify=True`
+- `MP033`: World-writable `os.chmod()`: `0o777` -> `0o700`, `0o666` -> `0o600`
+- `TF004`: Terraform storage/database `storage_encrypted = false` -> `true`
+- `TF005`: Terraform database `publicly_accessible = true` -> `false`
+- `TF006`: Terraform S3 Public Access Block `block_public_* = false` -> `true`
+- `DF002`: Dockerfile missing non-root user -> injects `USER 10001:10001` before `CMD`/`ENTRYPOINT`
 
 ```bash
 mp scan . --fix
@@ -315,7 +322,7 @@ Top Findings:
 | `--staged` | `false` | Scan only git staged files (instant pre-commit mode) |
 | `--diff` | `None` | Scan only files modified against a git ref (e.g. `HEAD~1`, `main`) |
 | `--baseline` | `None` | Path to baseline JSON report to suppress existing findings |
-| `--fix` | `false` | Automatically patch safe security anti-patterns (MP012, MP023, MP014) |
+| `--fix` | `false` | Automatically patch safe security anti-patterns (SAST, IaC, Dockerfile, deps) |
 | `--rules-file` | `None` | Path to custom rules YAML/TOML file (`.maunprekshak-rules.yaml`) |
 | `--history` | `false` | Deep-scan git commit history for leaked credentials |
 | `--commits` | `50` | Maximum number of historical commits to inspect |

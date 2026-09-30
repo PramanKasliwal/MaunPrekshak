@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-30
+
+### Added & Enhanced
+- **Expanded Mechanical Auto-Fixing Engine (`--fix` Phase 2)**:
+  - Extends `--fix` from basic legacy rules to cover 11 automated security anti-patterns across Python SAST, Terraform IaC, and Dockerfile container configurations:
+    - **MP031** (AI/ML): Automatically rewrites `torch.load(path)` and `torch.load(path, weights_only=False)` to `torch.load(path, weights_only=True)` preventing pickle-based remote code execution.
+    - **MP036** (YAML): Automatically converts `yaml.unsafe_load()` to `yaml.safe_load()` and rewrites unsafe loaders (`Loader=yaml.Loader` / `UnsafeLoader`) to `Loader=yaml.SafeLoader`.
+    - **MP033** (File Permissions): Tightens overly permissive `os.chmod()` modes: `0o777` → `0o700` and `0o666` → `0o600`.
+    - **MP015** (Disabled SSL): Flips `verify=False` to `verify=True` in HTTP requests.
+    - **TF004** (IaC): Enables encryption for databases/storage volumes (`storage_encrypted = false` / `encrypted = false` → `true`).
+    - **TF005** (IaC): Disables public database accessibility in Terraform (`publicly_accessible = true` → `false`).
+    - **TF006** (IaC): Automatically enables S3 Public Access Block protection (`block_public_* = false` → `true`).
+    - **DF002** (Container): Injects unprivileged `USER 10001:10001` before `CMD` or `ENTRYPOINT` in Dockerfiles lacking a non-root user.
+  - Fully idempotent and deterministic: safely runs in CI/CD pre-commit hooks and local developer workflows.
+
 ## [0.11.0] - 2026-09-29
 
 ### Added

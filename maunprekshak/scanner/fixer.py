@@ -1,14 +1,27 @@
 """
-Deterministic mechanical auto-fixing for safe SAST anti-patterns.
+Deterministic mechanical auto-fixing for safe SAST, IaC, and container anti-patterns.
 Supports:
 - MP012: yaml.load(data) -> yaml.safe_load(data)
-- MP023: tarfile.extractall() -> tarfile.extractall(filter='data')
 - MP014: tempfile.mktemp(...) -> tempfile.NamedTemporaryFile(...).name
+- MP015: verify=False -> verify=True
+- MP023: tarfile.extractall() -> tarfile.extractall(filter='data')
+- MP031: torch.load(...) -> torch.load(..., weights_only=True)
+- MP033: os.chmod(..., 0o777) -> 0o700 / 0o666 -> 0o600
+- MP036: yaml.unsafe_load(...) -> yaml.safe_load(...) / Loader=yaml.SafeLoader
+- TF004: storage_encrypted / encrypted = false -> true
+- TF005: publicly_accessible = true -> false
+- TF006: block_public_acls = false -> true
+- DF002: Missing non-root USER -> inject USER 10001:10001
 """
 import os
 import re
 from typing import List, Tuple, Set
 from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
+
+FIXABLE_RULES = {
+    "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
+    "TF004", "TF005", "TF006", "DF002",
+}
 
 
 def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
@@ -25,8 +38,7 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
     except Exception:
         return 0
 
-    fixable_rules = {"MP012", "MP023", "MP014"}
-    applicable = [f for f in findings if f.check_id in fixable_rules]
+    applicable = [f for f in findings if f.check_id in FIXABLE_RULES]
     if not applicable:
         return 0
 
@@ -43,12 +55,10 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
             new_line = line
 
             if finding.check_id == "MP012":
-                # Replace yaml.load( with yaml.safe_load(
                 if "yaml.load(" in new_line:
                     new_line = new_line.replace("yaml.load(", "yaml.safe_load(")
 
             elif finding.check_id == "MP014":
-                # Replace tempfile.mktemp(...) with tempfile.NamedTemporaryFile(...).name
                 if "tempfile.mktemp(" in new_line:
                     new_line = re.sub(
                         r"tempfile\.mktemp\((.*?)\)",
@@ -56,8 +66,11 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                         new_line,
                     )
 
+            elif finding.check_id == "MP015":
+                if re.search(r"\bverify\s*=\s*False\b", new_line):
+                    new_line = re.sub(r"\bverify\s*=\s*False\b", "verify=True", new_line)
+
             elif finding.check_id == "MP023":
-                # Replace .extractall(...) with filter='data'
                 if ".extractall(" in new_line:
                     def _patch_extractall(match):
                         args = match.group(1).strip()
@@ -72,6 +85,77 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                         _patch_extractall,
                         new_line,
                     )
+
+            elif finding.check_id == "MP031":
+                if "weights_only=False" in new_line or "weights_only = False" in new_line:
+                    new_line = re.sub(r"\bweights_only\s*=\s*False\b", "weights_only=True", new_line)
+                elif "torch.load(" in new_line:
+                    def _patch_torch_load(match):
+                        args = match.group(1).strip()
+                        if not args:
+                            return "torch.load(weights_only=True)"
+                        elif "weights_only=" not in args:
+                            return f"torch.load({args}, weights_only=True)"
+                        return match.group(0)
+
+                    new_line = re.sub(r"torch\.load\((.*?)\)", _patch_torch_load, new_line)
+
+            elif finding.check_id == "MP033":
+                if "0o777" in new_line:
+                    new_line = re.sub(r"\b0o777\b", "0o700", new_line)
+                elif "0o666" in new_line:
+                    new_line = re.sub(r"\b0o666\b", "0o600", new_line)
+
+            elif finding.check_id == "MP036":
+                if "yaml.unsafe_load(" in new_line:
+                    new_line = new_line.replace("yaml.unsafe_load(", "yaml.safe_load(")
+                elif re.search(r"Loader\s*=\s*(?:yaml\.)?(?:UnsafeLoader|Loader|CLoader)\b", new_line):
+                    new_line = re.sub(
+                        r"Loader\s*=\s*(?:yaml\.)?(?:UnsafeLoader|Loader|CLoader)\b",
+                        "Loader=yaml.SafeLoader",
+                        new_line,
+                    )
+
+            elif finding.check_id == "TF004":
+                new_line = re.sub(
+                    r"\b(storage_encrypted|encrypted)\s*=\s*false\b",
+                    r"\1 = true",
+                    new_line,
+                    flags=re.IGNORECASE,
+                )
+
+            elif finding.check_id == "TF005":
+                new_line = re.sub(
+                    r"\bpublicly_accessible\s*=\s*true\b",
+                    "publicly_accessible = false",
+                    new_line,
+                    flags=re.IGNORECASE,
+                )
+
+            elif finding.check_id == "TF006":
+                new_line = re.sub(
+                    r"\b(block_public_acls|block_public_policy|ignore_public_acls|restrict_public_buckets)\s*=\s*false\b",
+                    r"\1 = true",
+                    new_line,
+                    flags=re.IGNORECASE,
+                )
+
+            elif finding.check_id == "DF002":
+                if re.search(r"^\s*USER\s+(?:root|0)\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"^\s*USER\s+(?:root|0)\b", "USER 10001:10001", new_line, flags=re.IGNORECASE)
+                else:
+                    has_user = any(re.match(r"^\s*USER\s+", l, re.IGNORECASE) for l in lines)
+                    if not has_user:
+                        cmd_idx = next(
+                            (i for i, l in enumerate(lines) if re.match(r"^\s*(CMD|ENTRYPOINT)\b", l, re.IGNORECASE)),
+                            None,
+                        )
+                        if cmd_idx is not None:
+                            lines.insert(cmd_idx, "USER 10001:10001\n")
+                        else:
+                            lines.append("USER 10001:10001\n")
+                        applied += 1
+                        modified = True
 
             if new_line != line:
                 lines[line_idx] = new_line
@@ -93,8 +177,7 @@ def apply_auto_fixes(scan_result: ScanResult) -> Tuple[int, ScanResult]:
     Apply auto-fixes across all SAST findings in scan_result.
     Returns (total_fixes_applied, updated_scan_result).
     """
-    fixable_rules = {"MP012", "MP023", "MP014"}
-    fixable_findings = [s for s in scan_result.sast if s.check_id in fixable_rules]
+    fixable_findings = [s for s in scan_result.sast if s.check_id in FIXABLE_RULES]
     if not fixable_findings:
         return 0, scan_result
 
