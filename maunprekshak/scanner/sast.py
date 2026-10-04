@@ -59,6 +59,13 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP046  Mass assignment via **kwargs  HIGH
 # MP047  GraphQL schema introspection  LOW
 # MP048  Host header injection         MEDIUM
+# MP049  Insecure password hashing     HIGH
+# MP050  Insecure PRNG for tokens/keys HIGH
+# MP051  Dangerous NumPy pickle load   HIGH
+# MP052  Weak RSA key length (<2048)   HIGH
+# MP053  Insecure RSA PKCS1v15 padding MEDIUM
+# MP054  Insecure XML entity resolution HIGH
+# MP055  Deprecated TLS/SSL protocol   MEDIUM
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -74,6 +81,8 @@ class SecurityVisitor(ast.NodeVisitor):
     def _add(self, node: ast.AST, check_id: str, severity: str, desc: str, rec: str) -> None:
         line = getattr(node, "lineno", 0)
         col = getattr(node, "col_offset", 0)
+        if any(f.check_id == check_id and f.line == line for f in self.findings):
+            return
         snippet = self.source_lines[line - 1].rstrip() if 0 < line <= len(self.source_lines) else ""
         self.findings.append(SASTFinding(
             file_path=self.file_path,
@@ -809,6 +818,94 @@ class SecurityVisitor(ast.NodeVisitor):
                               "Host Header Injection: using untrusted request host to construct URLs",
                               "Avoid using HTTP Host headers for URL or reset link generation. Use server-configured domains.")
 
+        # MP049 — Insecure password hashing (unsalted MD5/SHA-1/SHA-256 for passwords)
+        is_hashlib_call = False
+        algo_name = ""
+        if obj == "hashlib" and method in ("md5", "sha1", "sha256", "sha224", "sha384", "sha512", "new"):
+            is_hashlib_call = True
+            algo_name = method
+            if method == "new" and node.args and isinstance(node.args[0], ast.Constant):
+                algo_name = str(node.args[0].value).lower()
+        elif full_func.startswith("hashlib."):
+            is_hashlib_call = True
+            algo_name = full_func.split(".")[-1]
+
+        if is_hashlib_call and algo_name in ("md5", "sha1", "sha256", "sha224", "sha384", "sha512"):
+            has_password_arg = any(self._has_password_identifier(arg) for arg in node.args)
+            if has_password_arg:
+                self._add(node, "MP049", Severity.HIGH.value,
+                          f"Insecure password hashing: '{algo_name}' is a fast digest algorithm vulnerable to GPU brute-force attacks",
+                          "Use slow adaptive password hashing algorithms designed for credentials (e.g. bcrypt, argon2id, or hashlib.scrypt with salt and high iterations).")
+
+        # MP051 — Dangerous NumPy pickle deserialization (allow_pickle=True)
+        if (obj in ("numpy", "np") and method == "load") or full_func in ("numpy.load", "np.load"):
+            for kw in node.keywords:
+                if kw.arg == "allow_pickle":
+                    if (isinstance(kw.value, ast.Constant) and kw.value.value is True) or (
+                        isinstance(kw.value, ast.Constant) and kw.value.value == 1
+                    ):
+                        self._add(node, "MP051", Severity.HIGH.value,
+                                  "numpy.load called with allow_pickle=True allows arbitrary code execution via crafted pickled arrays",
+                                  "Set allow_pickle=False when loading untrusted .npy/.npz data files, or use Safetensors/HDF5 for array serialization.")
+
+        # MP052 — Weak RSA cryptographic key length (< 2048 bits)
+        if (
+            (obj in ("rsa",) and method == "generate_private_key")
+            or full_func.endswith("generate_private_key")
+            or ((obj in ("RSA", "Crypto.PublicKey.RSA", "Cryptodome.PublicKey.RSA") and method == "generate") or full_func.endswith("RSA.generate"))
+        ):
+            key_size = None
+            for kw in node.keywords:
+                if kw.arg in ("key_size", "bits"):
+                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int):
+                        key_size = kw.value.value
+                        break
+            if key_size is None and node.args:
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, int) and arg.value >= 128:
+                        key_size = arg.value
+                        break
+            if key_size is not None and key_size < 2048:
+                self._add(node, "MP052", Severity.HIGH.value,
+                          f"Weak RSA key length detected ({key_size} bits < 2048 bits) — vulnerable to factorization attacks",
+                          "Use an RSA key length of at least 2048 bits (3072 or 4096 bits recommended for long-term security).")
+
+        # MP053 — Insecure RSA encryption padding PKCS#1 v1.5
+        if (
+            (obj == "padding" and method == "PKCS1v15")
+            or full_func in ("padding.PKCS1v15", "asymmetric.padding.PKCS1v15")
+            or ((obj in ("PKCS1_v1_5", "Crypto.Cipher.PKCS1_v1_5") and method == "new") or full_func.endswith("PKCS1_v1_5.new"))
+            or func_name == "PKCS1v15"
+        ):
+            self._add(node, "MP053", Severity.MEDIUM.value,
+                      "Insecure RSA encryption padding PKCS#1 v1.5 detected — vulnerable to padding oracle attacks",
+                      "Use OAEP (Optimal Asymmetric Encryption Padding) with MGF1 and SHA-256 for asymmetric RSA encryption.")
+
+        # MP054 — Insecure XML entity resolution (XXE vulnerability in lxml XMLParser)
+        if (
+            (obj in ("etree", "lxml.etree") and method == "XMLParser")
+            or full_func in ("etree.XMLParser", "lxml.etree.XMLParser")
+            or func_name == "XMLParser"
+        ):
+            for kw in node.keywords:
+                if kw.arg == "resolve_entities":
+                    if isinstance(kw.value, ast.Constant) and (kw.value.value is True or kw.value.value == 1):
+                        self._add(node, "MP054", Severity.HIGH.value,
+                                  "lxml XMLParser configured with resolve_entities=True enables XML External Entity (XXE) attacks",
+                                  "Set resolve_entities=False (or use defusedxml) to prevent XXE file disclosure and server-side request forgery.")
+
+    def _has_password_identifier(self, node: ast.AST) -> bool:
+        """Check if an AST node contains or references a password identifier."""
+        if isinstance(node, ast.Name):
+            return any(k in node.id.lower() for k in ("password", "passwd", "pwd", "passphrase"))
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                return self._has_password_identifier(node.func.value)
+            return any(self._has_password_identifier(a) for a in node.args)
+        elif isinstance(node, ast.Attribute):
+            return any(k in node.attr.lower() for k in ("password", "passwd", "pwd", "passphrase")) or self._has_password_identifier(node.value)
+        return False
+
     def visit_Assert(self, node: ast.Assert) -> None:
         """MP010 — assert used for security checks (stripped in optimized mode)."""
         # Skip assert statements in test files (tests use assertions legitimately)
@@ -828,19 +925,62 @@ class SecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        """MP011 / MP047 — Detect DEBUG = True and GRAPHQL_INTROSPECTION = True assignments."""
+        """MP011 / MP047 / MP049 / MP050 — Assignments checks."""
         for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == "DEBUG":
-                if isinstance(node.value, ast.Constant) and node.value.value is True:
-                    self._add(node, "MP011", Severity.MEDIUM.value,
-                              "DEBUG = True detected — ensure this is not in production configuration",
-                              "Use environment variables to control debug mode: "
-                              "DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'.")
-            elif isinstance(target, ast.Name) and target.id in ("GRAPHQL_INTROSPECTION", "INTROSPECTION_ENABLED"):
-                if isinstance(node.value, ast.Constant) and node.value.value is True:
-                    self._add(node, "MP047", Severity.LOW.value,
-                              f"{target.id} = True detected — GraphQL introspection enabled",
-                              "Disable GraphQL schema introspection in production environments.")
+            if isinstance(target, ast.Name):
+                t_lower = target.id.lower()
+                if target.id == "DEBUG":
+                    if isinstance(node.value, ast.Constant) and node.value.value is True:
+                        self._add(node, "MP011", Severity.MEDIUM.value,
+                                  "DEBUG = True detected — ensure this is not in production configuration",
+                                  "Use environment variables to control debug mode: "
+                                  "DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'.")
+                elif target.id in ("GRAPHQL_INTROSPECTION", "INTROSPECTION_ENABLED"):
+                    if isinstance(node.value, ast.Constant) and node.value.value is True:
+                        self._add(node, "MP047", Severity.LOW.value,
+                                  f"{target.id} = True detected — GraphQL introspection enabled",
+                                  "Disable GraphQL schema introspection in production environments.")
+
+                # MP049 — Password hash assignment using fast digest algorithm
+                if any(k in t_lower for k in ("password", "passwd", "pwd", "passphrase")):
+                    for sub in ast.walk(node.value):
+                        if isinstance(sub, ast.Call):
+                            sub_obj, sub_meth = self._get_attr_chain(sub)
+                            sub_full = self._get_full_func_name(sub)
+                            if (sub_obj == "hashlib" and sub_meth in ("md5", "sha1", "sha256", "sha224", "sha384", "sha512", "new")) or sub_full.startswith("hashlib."):
+                                self._add(node, "MP049", Severity.HIGH.value,
+                                          "Insecure password hashing: fast digest algorithm used for credential storage",
+                                          "Use slow adaptive password hashing algorithms designed for credentials (e.g. bcrypt, argon2id, or hashlib.scrypt).")
+                                break
+
+                # MP050 — Insecure PRNG for security tokens, passwords, OTPs, or API keys
+                if any(k in t_lower for k in ("token", "password", "passwd", "pwd", "secret", "api_key", "otp", "salt", "nonce", "pin")):
+                    for sub in ast.walk(node.value):
+                        if isinstance(sub, ast.Call):
+                            sub_obj, sub_meth = self._get_attr_chain(sub)
+                            sub_full = self._get_full_func_name(sub)
+                            if (sub_obj == "random" and sub_meth in ("choice", "choices", "randint", "randrange", "getrandbits", "sample", "random")) or (
+                                sub_full in ("random.choice", "random.choices", "random.randint", "random.randrange", "random.getrandbits", "random.sample", "random.random")
+                            ):
+                                self._add(node, "MP050", Severity.HIGH.value,
+                                          f"Cryptographically insecure PRNG (random.{sub_meth or 'choice'}) used to generate security-sensitive value '{target.id}'",
+                                          "Use Python's 'secrets' module (secrets.token_hex, secrets.token_urlsafe, secrets.choice, secrets.randbelow) for CSPRNG security.")
+                                break
+
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        """MP055 — Insecure / Deprecated TLS Version."""
+        if isinstance(node.value, ast.Name) and node.value.id == "ssl":
+            if node.attr in ("PROTOCOL_TLSv1", "PROTOCOL_TLSv1_1", "PROTOCOL_SSLv23"):
+                self._add(node, "MP055", Severity.MEDIUM.value,
+                          f"Deprecated or insecure TLS/SSL protocol version 'ssl.{node.attr}' configured",
+                          "Enforce modern TLS versions: use ssl.PROTOCOL_TLS_CLIENT or ssl.TLSVersion.TLSv1_2+.")
+        elif isinstance(node.value, ast.Attribute) and node.value.attr == "TLSVersion":
+            if node.attr in ("TLSv1", "TLSv1_1"):
+                self._add(node, "MP055", Severity.MEDIUM.value,
+                          f"Deprecated TLS version 'ssl.TLSVersion.{node.attr}' configured",
+                          "Enforce modern TLS versions: set minimum TLS version to ssl.TLSVersion.TLSv1_2 or TLSv1_3.")
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:

@@ -568,6 +568,209 @@ def parse_composer_json(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_csproj(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a .NET project file (*.csproj, *.fsproj, *.vbproj) and extract PackageReference dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1]
+            if tag == "PackageReference":
+                pkg_name = elem.attrib.get("Include") or elem.attrib.get("Update") or ""
+                version = elem.attrib.get("Version") or ""
+                if not version:
+                    for child in elem:
+                        ctag = child.tag.split("}")[-1]
+                        if ctag == "Version":
+                            version = (child.text or "").strip()
+                            break
+                pkg_name = pkg_name.strip()
+                version = version.strip()
+                if pkg_name:
+                    clean_ver = re.sub(r"^[=><~^v\s]+", "", version).strip()
+                    packages.append((pkg_name, clean_ver))
+    except Exception:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            pattern = re.compile(
+                r"""<PackageReference\s+[^>]*?(?:Include|Update)=['"]([^'"]+)['"][^>]*?(?:Version=['"]([^'"]+)['"]|>[^<]*<Version>([^<]+)</Version>)""",
+                re.IGNORECASE,
+            )
+            for m in pattern.finditer(content):
+                pkg = m.group(1).strip()
+                ver = (m.group(2) or m.group(3) or "").strip()
+                clean_ver = re.sub(r"^[=><~^v\s]+", "", ver).strip()
+                if pkg:
+                    packages.append((pkg, clean_ver))
+        except Exception:
+            pass
+    return packages
+
+
+def parse_packages_config(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a legacy .NET packages.config XML file and extract package id and version.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1]
+            if tag == "package":
+                pkg_id = elem.attrib.get("id", "").strip()
+                version = elem.attrib.get("version", "").strip()
+                if pkg_id:
+                    clean_ver = re.sub(r"^[=><~^v\s]+", "", version).strip()
+                    packages.append((pkg_id, clean_ver))
+    except Exception:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            pattern = re.compile(
+                r"""<package\s+[^>]*?id=['"]([^'"]+)['"][^>]*?version=['"]([^'"]+)['"]""",
+                re.IGNORECASE,
+            )
+            for m in pattern.finditer(content):
+                pkg = m.group(1).strip()
+                ver = m.group(2).strip()
+                clean_ver = re.sub(r"^[=><~^v\s]+", "", ver).strip()
+                if pkg:
+                    packages.append((pkg, clean_ver))
+        except Exception:
+            pass
+    return packages
+
+
+def parse_packages_lock_json(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a .NET packages.lock.json file and extract pinned package names and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+        deps = data.get("dependencies", {})
+        if isinstance(deps, dict):
+            for tfm, pkgs in deps.items():
+                if isinstance(pkgs, dict):
+                    for pkg_name, info in pkgs.items():
+                        if isinstance(info, dict):
+                            ver = str(info.get("resolved") or info.get("requested") or "").strip()
+                            clean_ver = re.sub(r"^[=><~^v\s]+", "", ver).strip()
+                            if pkg_name and clean_ver:
+                                packages.append((pkg_name, clean_ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_pubspec_yaml(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Dart/Flutter pubspec.yaml file and extract direct dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    in_deps_section = False
+    cur_pkg = None
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.split("#")[0].rstrip()
+                if not raw:
+                    continue
+                if re.match(r"^(dependencies|dev_dependencies)\s*:", raw) and not raw.startswith(" "):
+                    in_deps_section = True
+                    cur_pkg = None
+                    continue
+                elif not raw.startswith(" ") and not raw.startswith("\t") and raw.endswith(":"):
+                    in_deps_section = False
+                    cur_pkg = None
+                    continue
+
+                if in_deps_section:
+                    # Case 1: Nested version under package (e.g. 4 spaces "version: ^2.0.6")
+                    if cur_pkg and re.match(r"^\s{4,8}version\s*:\s*(.+)$", raw):
+                        v_val = re.match(r"^\s{4,8}version\s*:\s*(.+)$", raw).group(1).strip().strip("'\"")
+                        clean_ver = re.sub(r"^[=><~^v\s]+", "", v_val).split()[0].strip()
+                        if clean_ver and re.match(r"^\d", clean_ver):
+                            packages.append((cur_pkg, clean_ver))
+                        else:
+                            packages.append((cur_pkg, ""))
+                        cur_pkg = None
+                        continue
+
+                    # Case 2: Package with version on same line (e.g. 2 spaces "http: ^0.13.3")
+                    m_pkg_ver = re.match(r"^\s{2}([a-zA-Z0-9_]+)\s*:\s*(.+)$", raw)
+                    if m_pkg_ver:
+                        pkg = m_pkg_ver.group(1).strip()
+                        val = m_pkg_ver.group(2).strip().strip("'\"")
+                        if pkg in ("flutter", "flutter_test") or val.startswith("sdk:"):
+                            cur_pkg = None
+                            continue
+                        clean_ver = re.sub(r"^[=><~^v\s]+", "", val).split()[0].strip()
+                        if clean_ver and re.match(r"^\d", clean_ver):
+                            packages.append((pkg, clean_ver))
+                        else:
+                            packages.append((pkg, ""))
+                        cur_pkg = None
+                        continue
+
+                    # Case 3: Package name only on line (e.g. 2 spaces "shared_preferences:")
+                    m_pkg_only = re.match(r"^\s{2}([a-zA-Z0-9_]+)\s*:$", raw)
+                    if m_pkg_only:
+                        pkg = m_pkg_only.group(1).strip()
+                        if pkg not in ("flutter", "flutter_test"):
+                            cur_pkg = pkg
+                        else:
+                            cur_pkg = None
+                        continue
+    except Exception:
+        pass
+    return packages
+
+
+def parse_pubspec_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Dart/Flutter pubspec.lock file and extract pinned package names and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    in_packages = False
+    cur_pkg = None
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.split("#")[0].rstrip()
+                if not raw:
+                    continue
+                if re.match(r"^packages\s*:", raw) and not raw.startswith(" "):
+                    in_packages = True
+                    cur_pkg = None
+                    continue
+                elif not raw.startswith(" ") and not raw.startswith("\t") and raw.endswith(":"):
+                    in_packages = False
+                    cur_pkg = None
+                    continue
+
+                if in_packages:
+                    m_pkg = re.match(r"^\s{2}([a-zA-Z0-9_]+)\s*:", raw)
+                    if m_pkg:
+                        cur_pkg = m_pkg.group(1).strip()
+                    elif cur_pkg:
+                        m_ver = re.match(r"^\s{4}version\s*:\s*['\"]?([^'\"\s]+)['\"]?", raw)
+                        if m_ver:
+                            ver = m_ver.group(1).strip()
+                            if cur_pkg and ver and re.match(r"^\d", ver):
+                                packages.append((cur_pkg, ver))
+                            cur_pkg = None
+    except Exception:
+        pass
+    return packages
+
+
 
 # ─── OSV.dev API ──────────────────────────────────────────────────────────────
 
@@ -678,6 +881,8 @@ async def scan_dependencies(
     Looks for Rust manifests: Cargo.lock, Cargo.toml
     Looks for Java manifests: pom.xml, build.gradle, build.gradle.kts, gradle.lockfile
     Looks for PHP manifests: composer.lock, composer.json
+    Looks for .NET NuGet manifests: packages.lock.json, packages.config, *.csproj, *.fsproj, *.vbproj
+    Looks for Dart/Flutter Pub manifests: pubspec.lock, pubspec.yaml
 
     Args:
         path: Absolute path to the project root directory.
@@ -692,6 +897,8 @@ async def scan_dependencies(
     cargo_packages: Dict[str, str] = {}
     maven_packages: Dict[str, str] = {}
     packagist_packages: Dict[str, str] = {}
+    nuget_packages: Dict[str, str] = {}
+    pub_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -724,6 +931,14 @@ async def scan_dependencies(
     packagist_parsers = [
         ("composer.lock", parse_composer_lock),
         ("composer.json", parse_composer_json),
+    ]
+    nuget_parsers = [
+        ("packages.lock.json", parse_packages_lock_json),
+        ("packages.config", parse_packages_config),
+    ]
+    pub_parsers = [
+        ("pubspec.lock", parse_pubspec_lock),
+        ("pubspec.yaml", parse_pubspec_yaml),
     ]
 
     for filename, parser in python_parsers:
@@ -816,7 +1031,57 @@ async def scan_dependencies(
                 if pkg not in packagist_packages or (ver and not packagist_packages[pkg]):
                     packagist_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages):
+    for filename, parser in nuget_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in nuget_packages or (ver and not nuget_packages[pkg]):
+                    nuget_packages[pkg] = ver
+
+    # Scan for .NET project files (*.csproj, *.fsproj, *.vbproj)
+    dotnet_files = []
+    if target_files is not None:
+        dotnet_files = [f for f in target_files if f.endswith((".csproj", ".fsproj", ".vbproj"))]
+    else:
+        try:
+            for root_dir, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "bin", "obj", ".vs", "venv", ".venv")]
+                for file in files:
+                    if file.endswith((".csproj", ".fsproj", ".vbproj")):
+                        dotnet_files.append(os.path.join(root_dir, file))
+        except Exception:
+            pass
+
+    for proj_file in dotnet_files:
+        if os.path.exists(proj_file):
+            for pkg, ver in parse_csproj(proj_file):
+                if pkg not in nuget_packages or (ver and not nuget_packages[pkg]):
+                    nuget_packages[pkg] = ver
+
+    for filename, parser in pub_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in pub_packages or (ver and not pub_packages[pkg]):
+                    pub_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -827,6 +1092,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "crates.io") for pkg, ver in cargo_packages.items()]
         + [_query_osv(pkg, ver, "Maven") for pkg, ver in maven_packages.items()]
         + [_query_osv(pkg, ver, "Packagist") for pkg, ver in packagist_packages.items()]
+        + [_query_osv(pkg, ver, "NuGet") for pkg, ver in nuget_packages.items()]
+        + [_query_osv(pkg, ver, "Pub") for pkg, ver in pub_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

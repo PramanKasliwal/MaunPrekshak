@@ -8,6 +8,11 @@ Supports:
 - MP031: torch.load(...) -> torch.load(..., weights_only=True)
 - MP033: os.chmod(..., 0o777) -> 0o700 / 0o666 -> 0o600
 - MP036: yaml.unsafe_load(...) -> yaml.safe_load(...) / Loader=yaml.SafeLoader
+- MP051: numpy.load(..., allow_pickle=True) -> allow_pickle=False
+- K8S001: privileged: true -> privileged: false
+- K8S006: allowPrivilegeEscalation: true -> allowPrivilegeEscalation: false
+- K8S007: readOnlyRootFilesystem: false -> readOnlyRootFilesystem: true
+- K8S009: hostNetwork/hostPID/hostIPC: true -> false
 - TF004: storage_encrypted / encrypted = false -> true
 - TF005: publicly_accessible = true -> false
 - TF006: block_public_acls = false -> true
@@ -20,6 +25,7 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
+    "MP051", "K8S001", "K8S006", "K8S007", "K8S009",
     "TF004", "TF005", "TF006", "DF002",
 }
 
@@ -115,6 +121,27 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                         "Loader=yaml.SafeLoader",
                         new_line,
                     )
+
+            elif finding.check_id == "MP051":
+                if re.search(r"\ballow_pickle\s*=\s*(?:True|1)\b", new_line):
+                    new_line = re.sub(r"\ballow_pickle\s*=\s*(?:True|1)\b", "allow_pickle=False", new_line)
+
+            elif finding.check_id == "K8S001":
+                if re.search(r"\bprivileged\s*:\s*true\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"(\bprivileged\s*:\s*)true\b", r"\1false", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "K8S006":
+                if re.search(r"\ballowPrivilegeEscalation\s*:\s*true\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"(\ballowPrivilegeEscalation\s*:\s*)true\b", r"\1false", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "K8S007":
+                if re.search(r"\breadOnlyRootFilesystem\s*:\s*false\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"(\breadOnlyRootFilesystem\s*:\s*)false\b", r"\1true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "K8S009":
+                for prop in ("hostNetwork", "hostPID", "hostIPC"):
+                    if re.search(rf"\b{prop}\s*:\s*true\b", new_line, re.IGNORECASE):
+                        new_line = re.sub(rf"(\b{prop}\s*:\s*)true\b", r"\1false", new_line, flags=re.IGNORECASE)
 
             elif finding.check_id == "TF004":
                 new_line = re.sub(

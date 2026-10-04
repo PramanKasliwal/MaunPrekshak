@@ -17,6 +17,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # K8S006  Privilege escalation allowed             MEDIUM
 # K8S007  Non-read-only root filesystem            LOW
 # K8S008  Unrestricted service account token       MEDIUM
+# K8S009  Host namespace sharing (net/pid/ipc)     CRITICAL
+# K8S010  Dangerous service exposure (NodePort/LB) HIGH
+# K8S011  Missing or unconfined Seccomp profile    MEDIUM
+# K8S012  Missing NetworkPolicy for workload       MEDIUM
+# K8S013  Plaintext secret in container env        HIGH
+# K8S014  Default namespace usage                  LOW
 
 EXCLUDE_DIRS: Set[str] = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
@@ -109,10 +115,14 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
     seen_resources_requests = False
     in_containers_block = False
     has_automount_false = False
+    has_seccomp_profile = False
+    is_service = False
+    is_workload = False
+    has_network_policy = False
 
     for raw in lines:
         stripped = raw.strip().lower()
-        if re.match(r"^(containers|initContainers)\s*:", raw.strip()):
+        if re.match(r"^(containers|initcontainers)\s*:", stripped):
             in_containers_block = True
         if re.match(r"^\s*-\s*(name|image)\s*:", raw):
             in_containers_block = True
@@ -122,6 +132,16 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
             seen_resources_limits = True
         if "requests:" in stripped:
             seen_resources_requests = True
+        if "seccompprofile:" in stripped or "runtimedefault" in stripped:
+            has_seccomp_profile = True
+        if re.match(r"^\s*kind\s*:\s*service\b", stripped):
+            is_service = True
+        if re.match(r"^\s*kind\s*:\s*(deployment|statefulset|daemonset|pod|job|cronjob)\b", stripped):
+            is_workload = True
+        if re.match(r"^\s*kind\s*:\s*networkpolicy\b", stripped):
+            has_network_policy = True
+
+    cur_secret_env_name: Optional[str] = None
 
     for i, raw in enumerate(lines):
         lineno = i + 1
@@ -210,6 +230,80 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
                     raw.rstrip(),
                 ))
 
+        # K8S009 — Host namespace sharing (hostNetwork, hostPID, hostIPC)
+        for prop, name in [("hostnetwork", "hostNetwork"), ("hostpid", "hostPID"), ("hostipc", "hostIPC")]:
+            if f"{prop}:" in line_lower and "true" in line_lower:
+                if not _is_suppressed(raw, "K8S009"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "K8S009", Severity.CRITICAL.value,
+                        f"Host namespace sharing detected ({name}: true) — container isolation boundary broken",
+                        f"Set {name}: false. Sharing host namespaces allows network sniffing, process tracing, or IPC manipulation.",
+                        raw.rstrip(),
+                    ))
+
+        # K8S010 — Dangerous service exposure (NodePort / LoadBalancer)
+        if is_service:
+            if re.search(r"^\s*type\s*:\s*NodePort\b", raw, re.IGNORECASE):
+                if not _is_suppressed(raw, "K8S010"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "K8S010", Severity.HIGH.value,
+                        "Dangerous service exposure: type: NodePort opens static port across all cluster nodes",
+                        "Use ClusterIP with an Ingress controller and API gateway instead of exposing NodePorts directly.",
+                        raw.rstrip(),
+                    ))
+            elif re.search(r"^\s*type\s*:\s*LoadBalancer\b", raw, re.IGNORECASE):
+                if not _is_suppressed(raw, "K8S010"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "K8S010", Severity.HIGH.value,
+                        "Public service exposure: type: LoadBalancer provisions external cloud load balancer",
+                        "Verify public accessibility requirement. Use internal load balancer annotations or ClusterIP with Ingress.",
+                        raw.rstrip(),
+                    ))
+
+        # K8S011 — Seccomp profile explicitly set to Unconfined
+        if "type:" in line_lower and "unconfined" in line_lower:
+            if not _is_suppressed(raw, "K8S011"):
+                findings.append(_make_finding(
+                    file_path, lineno, "K8S011", Severity.MEDIUM.value,
+                    "Seccomp profile set to Unconfined — disables standard kernel syscall filtering",
+                    "Set securityContext.seccompProfile.type: RuntimeDefault to enforce standard syscall filters.",
+                    raw.rstrip(),
+                ))
+
+        # K8S013 — Plaintext secret in container env
+        env_match = re.search(
+            r"^\s*-\s*name\s*:\s*['\"]?([A-Za-z0-9_]*(?:PASSWORD|SECRET|KEY|TOKEN|AUTH|PASSWD|CREDENTIAL)[A-Za-z0-9_]*)['\"]?",
+            raw,
+            re.IGNORECASE,
+        )
+        if env_match:
+            cur_secret_env_name = env_match.group(1)
+        elif cur_secret_env_name:
+            val_match = re.search(r"^\s*value\s*:\s*['\"]?([^'\"\s#]+)['\"]?", raw)
+            if val_match and "valuefrom" not in line_lower:
+                val = val_match.group(1).strip()
+                if val and not (val.startswith("{{") or val.startswith("$(") or val.startswith("${")):
+                    if not _is_suppressed(raw, "K8S013"):
+                        findings.append(_make_finding(
+                            file_path, lineno, "K8S013", Severity.HIGH.value,
+                            f"Plaintext secret detected in container env var '{cur_secret_env_name}'",
+                            "Store sensitive credentials in Kubernetes Secrets and reference them using valueFrom.secretKeyRef.",
+                            raw.rstrip(),
+                        ))
+                cur_secret_env_name = None
+            elif re.match(r"^\s*-\s*name\s*:", raw) or re.match(r"^\s*[a-zA-Z]", raw) or "valuefrom:" in line_lower:
+                cur_secret_env_name = None
+
+        # K8S014 — Default namespace usage
+        if re.search(r"^\s*namespace\s*:\s*['\"]?default['\"]?\s*(?:#.*)?$", raw, re.IGNORECASE):
+            if not _is_suppressed(raw, "K8S014"):
+                findings.append(_make_finding(
+                    file_path, lineno, "K8S014", Severity.LOW.value,
+                    "Explicit usage of 'default' namespace detected — lacks tenant isolation",
+                    "Deploy workloads into dedicated, logically isolated namespaces instead of the default namespace.",
+                    raw.rstrip(),
+                ))
+
     # K8S002 — Missing resource limits or requests (document-level)
     if in_containers_block and not (seen_resources_limits and seen_resources_requests):
         if not _is_suppressed(lines[0] if lines else "", "K8S002"):
@@ -232,6 +326,26 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
                 file_path, 1, "K8S008", Severity.MEDIUM.value,
                 "automountServiceAccountToken not set to false — service account token auto-mounted to all containers",
                 "Set automountServiceAccountToken: false at the Pod spec level unless the workload requires K8s API access.",
+                "",
+            ))
+
+    # K8S011 — Missing Seccomp profile (document-level)
+    if in_containers_block and not has_seccomp_profile:
+        if not _is_suppressed(lines[0] if lines else "", "K8S011"):
+            findings.append(_make_finding(
+                file_path, 1, "K8S011", Severity.MEDIUM.value,
+                "Missing Seccomp profile — container operates without syscall restriction filters",
+                "Set securityContext.seccompProfile.type: RuntimeDefault in Pod or container securityContext.",
+                "",
+            ))
+
+    # K8S012 — Missing NetworkPolicy definition for workload (document-level)
+    if is_workload and not has_network_policy:
+        if not _is_suppressed(lines[0] if lines else "", "K8S012"):
+            findings.append(_make_finding(
+                file_path, 1, "K8S012", Severity.MEDIUM.value,
+                "Missing NetworkPolicy definition — pod network traffic is unrestricted by default",
+                "Define a Kubernetes NetworkPolicy for this workload to isolate pod ingress and egress traffic.",
                 "",
             ))
 

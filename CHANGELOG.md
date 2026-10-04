@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-10-04
+
+### Added
+- **Kubernetes & Cloud-Native Hardening (`K8S009`–`K8S014`)**:
+  - Six enterprise cloud-native security checks for Kubernetes manifests and Helm charts:
+    - **K8S009** (CRITICAL): Host namespace sharing detected (`hostNetwork: true`, `hostPID: true`, `hostIPC: true`) breaking container boundary isolation.
+    - **K8S010** (HIGH): Dangerous service exposure via static node ports (`type: NodePort`) or public external load balancers (`type: LoadBalancer`).
+    - **K8S011** (MEDIUM): Missing or unconfined Seccomp profile (`seccompProfile.type: RuntimeDefault` omitted or explicitly set to `Unconfined`).
+    - **K8S012** (MEDIUM): Missing NetworkPolicy definition for Pods and workload controllers leaving ingress/egress unsegmented.
+    - **K8S013** (HIGH): Plaintext secrets and sensitive credentials detected in container `env[].value` instead of `valueFrom.secretKeyRef`.
+    - **K8S014** (LOW): Explicit or unconfigured usage of the `default` namespace.
+- **Cryptographic & Data Science SAST Suite (`MP049`–`MP055`)**:
+  - Seven dedicated AST security rules targeting cryptography and AI/ML data science anti-patterns:
+    - **MP049** (HIGH): Insecure password hashing using fast digest algorithms (`hashlib.md5`, `hashlib.sha1`, `hashlib.sha256`) without slow adaptive salt/work factors.
+    - **MP050** (HIGH): Insecure pseudorandom number generators (`random.choice`, `random.randint`, `random.random`) used for security tokens, passwords, OTPs, or API keys.
+    - **MP051** (HIGH): Dangerous NumPy pickle deserialization (`numpy.load(..., allow_pickle=True)`).
+    - **MP052** (HIGH): Weak RSA cryptographic key length (< 2048 bits) vulnerable to factorization attacks.
+    - **MP053** (MEDIUM): Insecure RSA PKCS#1 v1.5 encryption padding vulnerable to Bleichenbacher padding oracle attacks.
+    - **MP054** (HIGH): Insecure XML entity resolution in `lxml.etree.XMLParser(resolve_entities=True)` enabling XXE vulnerabilities.
+    - **MP055** (MEDIUM): Deprecated TLS/SSL protocol versions (`ssl.PROTOCOL_TLSv1`, `ssl.PROTOCOL_TLSv1_1`, `ssl.TLSVersion.TLSv1`).
+- **Multi-Ecosystem SCA Phase 3 (.NET NuGet & Dart/Flutter Pub)**:
+  - Native manifest parsing for .NET NuGet: Project files (`*.csproj`, `*.fsproj`, `*.vbproj`), lockfiles (`packages.lock.json`), and legacy `packages.config`.
+  - Native manifest parsing for Dart & Flutter Pub: Package definitions (`pubspec.yaml`) and lockfiles (`pubspec.lock`).
+  - Concurrent asynchronous vulnerability querying against OSV.dev for `"NuGet"` and `"Pub"` ecosystems with CVSS scoring and minimum safe version resolution.
+- **Mechanical Auto-Fixing Engine Phase 3 (`--fix` Expansion)**:
+  - Extended `--fix` to automatically and safely remediate:
+    - **MP051**: `numpy.load(..., allow_pickle=True)` → `allow_pickle=False`.
+    - **K8S001**: `privileged: true` → `privileged: false`.
+    - **K8S006**: `allowPrivilegeEscalation: true` → `allowPrivilegeEscalation: false`.
+    - **K8S007**: `readOnlyRootFilesystem: false` → `readOnlyRootFilesystem: true`.
+    - **K8S009**: `hostNetwork: true` / `hostPID: true` / `hostIPC: true` → `false`.
+
 ## [0.13.0] - 2026-10-01
 
 ### Added
