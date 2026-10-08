@@ -23,6 +23,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # K8S012  Missing NetworkPolicy for workload       MEDIUM
 # K8S013  Plaintext secret in container env        HIGH
 # K8S014  Default namespace usage                  LOW
+# K8S015  Mutable or untagged container image      HIGH
+# K8S016  Missing health probes (liveness/ready)   MEDIUM
+# K8S017  Container runtime socket mount           CRITICAL
+# K8S018  NET_RAW capability not dropped           MEDIUM
+# K8S019  Insecure imagePullPolicy (Never)         HIGH
+# K8S020  Default ServiceAccount assignment        LOW
 
 EXCLUDE_DIRS: Set[str] = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
@@ -119,6 +125,9 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
     is_service = False
     is_workload = False
     has_network_policy = False
+    seen_liveness_probe = False
+    seen_readiness_probe = False
+    has_dropped_net_raw = False
 
     for raw in lines:
         stripped = raw.strip().lower()
@@ -134,6 +143,12 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
             seen_resources_requests = True
         if "seccompprofile:" in stripped or "runtimedefault" in stripped:
             has_seccomp_profile = True
+        if "livenessprobe:" in stripped:
+            seen_liveness_probe = True
+        if "readinessprobe:" in stripped:
+            seen_readiness_probe = True
+        if any(d in stripped for d in ("- all", "- net_raw", "['all']", "[\"all\"]", "['net_raw']", "[\"net_raw\"]")):
+            has_dropped_net_raw = True
         if re.match(r"^\s*kind\s*:\s*service\b", stripped):
             is_service = True
         if re.match(r"^\s*kind\s*:\s*(deployment|statefulset|daemonset|pod|job|cronjob)\b", stripped):
@@ -304,6 +319,57 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
                     raw.rstrip(),
                 ))
 
+        # K8S015 — Mutable or untagged container image
+        img_match = re.search(r"^\s*image\s*:\s*['\"]?([^'\"\s#]+)['\"]?", raw)
+        if img_match:
+            img_val = img_match.group(1).strip()
+            if not (img_val.startswith("{{") or img_val.startswith("$")):
+                last_segment = img_val.split("/")[-1]
+                is_mutable = False
+                if ":" in last_segment:
+                    tag = last_segment.split(":", 1)[1].strip()
+                    if tag.lower() in ("latest", ""):
+                        is_mutable = True
+                elif "@" not in last_segment:
+                    is_mutable = True
+                if is_mutable and not _is_suppressed(raw, "K8S015"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "K8S015", Severity.HIGH.value,
+                        f"Mutable or untagged container image '{img_val}' detected — supply-chain drift risk",
+                        "Pin an immutable tag or digest (e.g. image: name:v1.2.3 or image: name@sha256:...) instead of ':latest' or untagged images.",
+                        raw.rstrip(),
+                    ))
+
+        # K8S017 — Container runtime socket mount
+        if any(sock in line_lower for sock in ("docker.sock", "containerd.sock", "crio.sock")):
+            if not _is_suppressed(raw, "K8S017"):
+                findings.append(_make_finding(
+                    file_path, lineno, "K8S017", Severity.CRITICAL.value,
+                    "Container runtime socket mounted into container — allows complete host and cluster takeover",
+                    "Do not mount container runtime sockets (docker.sock, containerd.sock). Use unprivileged or rootless build tools.",
+                    raw.rstrip(),
+                ))
+
+        # K8S019 — Insecure imagePullPolicy (Never)
+        if re.search(r"^\s*imagepullpolicy\s*:\s*['\"]?never['\"]?", raw, re.IGNORECASE):
+            if not _is_suppressed(raw, "K8S019"):
+                findings.append(_make_finding(
+                    file_path, lineno, "K8S019", Severity.HIGH.value,
+                    "Insecure imagePullPolicy: Never prevents Kubernetes from fetching verified container image updates",
+                    "Set imagePullPolicy: Always or IfNotPresent with immutable tags.",
+                    raw.rstrip(),
+                ))
+
+        # K8S020 — Default ServiceAccount usage
+        if re.search(r"^\s*serviceaccount(?:name)?\s*:\s*['\"]?default['\"]?\s*(?:#.*)?$", raw, re.IGNORECASE):
+            if not _is_suppressed(raw, "K8S020"):
+                findings.append(_make_finding(
+                    file_path, lineno, "K8S020", Severity.LOW.value,
+                    "Explicit assignment of 'default' ServiceAccount detected — lacks principle of least privilege",
+                    "Create and bind dedicated ServiceAccounts with least-privilege RBAC roles for workloads.",
+                    raw.rstrip(),
+                ))
+
     # K8S002 — Missing resource limits or requests (document-level)
     if in_containers_block and not (seen_resources_limits and seen_resources_requests):
         if not _is_suppressed(lines[0] if lines else "", "K8S002"):
@@ -346,6 +412,31 @@ def scan_single_k8s_manifest(file_path: str) -> List[SASTFinding]:
                 file_path, 1, "K8S012", Severity.MEDIUM.value,
                 "Missing NetworkPolicy definition — pod network traffic is unrestricted by default",
                 "Define a Kubernetes NetworkPolicy for this workload to isolate pod ingress and egress traffic.",
+                "",
+            ))
+
+    # K8S016 — Missing health checks (document-level)
+    if is_workload and in_containers_block and not (seen_liveness_probe and seen_readiness_probe):
+        if not _is_suppressed(lines[0] if lines else "", "K8S016"):
+            missing = []
+            if not seen_liveness_probe:
+                missing.append("livenessProbe")
+            if not seen_readiness_probe:
+                missing.append("readinessProbe")
+            findings.append(_make_finding(
+                file_path, 1, "K8S016", Severity.MEDIUM.value,
+                f"Container missing health check probes ({' and '.join(missing)}) — availability and recovery risk",
+                "Define both livenessProbe and readinessProbe for all workload containers to ensure zero-downtime rollouts and self-healing.",
+                "",
+            ))
+
+    # K8S018 — NET_RAW capability not dropped (document-level)
+    if is_workload and in_containers_block and not has_dropped_net_raw:
+        if not _is_suppressed(lines[0] if lines else "", "K8S018"):
+            findings.append(_make_finding(
+                file_path, 1, "K8S018", Severity.MEDIUM.value,
+                "Container does not drop NET_RAW capability — network spoofing and ARP poisoning risk (CIS 5.2.7)",
+                "Drop NET_RAW or ALL capabilities under securityContext.capabilities.drop: ['ALL'].",
                 "",
             ))
 

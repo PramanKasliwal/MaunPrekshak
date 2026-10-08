@@ -771,6 +771,106 @@ def parse_pubspec_lock(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_gemfile(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Ruby Gemfile and extract dependency gem names and version constraints.
+    Supports gem 'name', '~> 1.2.3' and gem "name".
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.split("#")[0].strip()
+                if not raw:
+                    continue
+                match = re.match(
+                    r"""^\s*gem\s+['"]([a-zA-Z0-9_\-\.]+)['"](?:\s*,\s*['"]([^'"]+)['"])?""",
+                    raw,
+                )
+                if match:
+                    pkg = match.group(1).lower()
+                    ver_spec = match.group(2) or ""
+                    version = re.sub(r"^[~>=<!\s]+", "", ver_spec).strip()
+                    packages.append((pkg, version))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_gemfile_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Ruby Gemfile.lock and extract pinned gem names and locked versions.
+    """
+    packages: List[tuple[str, str]] = []
+    in_specs = False
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.rstrip()
+                if not raw:
+                    continue
+                if re.match(r"^\s{2}specs:\s*$", raw):
+                    in_specs = True
+                    continue
+                elif in_specs and not raw.startswith(" "):
+                    in_specs = False
+                    continue
+                elif in_specs and re.match(r"^\s{2}[A-Za-z0-9]", raw):
+                    in_specs = False
+                    continue
+
+                if in_specs:
+                    match = re.match(r"^\s{4}([a-zA-Z0-9_\-\.]+)\s*\(([0-9][^)]*)\)", raw)
+                    if match:
+                        pkg = match.group(1).lower()
+                        ver = match.group(2).strip()
+                        packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_mix_exs(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an Elixir mix.exs project file and extract dependencies from deps.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        for match in re.finditer(
+            r"""\{:([a-zA-Z0-9_\-]+)\s*(?:,\s*['"]([^'"]+)['"])?""",
+            content,
+        ):
+            pkg = match.group(1).lower()
+            ver_spec = match.group(2) or ""
+            version = re.sub(r"^[~>=<!\s]+", "", ver_spec).strip()
+            packages.append((pkg, version))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_mix_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an Elixir mix.lock file and extract pinned package names and locked versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        for match in re.finditer(
+            r'"([a-zA-Z0-9_\-]+)"\s*:\s*\{:hex,\s*:[a-zA-Z0-9_\-]+,\s*"([0-9][^"]*)"',
+            content,
+        ):
+            pkg = match.group(1).lower()
+            ver = match.group(2).strip()
+            packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
 
 # ─── OSV.dev API ──────────────────────────────────────────────────────────────
 
@@ -899,6 +999,8 @@ async def scan_dependencies(
     packagist_packages: Dict[str, str] = {}
     nuget_packages: Dict[str, str] = {}
     pub_packages: Dict[str, str] = {}
+    rubygems_packages: Dict[str, str] = {}
+    hex_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -939,6 +1041,14 @@ async def scan_dependencies(
     pub_parsers = [
         ("pubspec.lock", parse_pubspec_lock),
         ("pubspec.yaml", parse_pubspec_yaml),
+    ]
+    rubygems_parsers = [
+        ("Gemfile.lock", parse_gemfile_lock),
+        ("Gemfile", parse_gemfile),
+    ]
+    hex_parsers = [
+        ("mix.lock", parse_mix_lock),
+        ("mix.exs", parse_mix_exs),
     ]
 
     for filename, parser in python_parsers:
@@ -1081,7 +1191,37 @@ async def scan_dependencies(
                 if pkg not in pub_packages or (ver and not pub_packages[pkg]):
                     pub_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages):
+    for filename, parser in rubygems_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in rubygems_packages or (ver and not rubygems_packages[pkg]):
+                    rubygems_packages[pkg] = ver
+
+    for filename, parser in hex_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in hex_packages or (ver and not hex_packages[pkg]):
+                    hex_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -1094,6 +1234,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "Packagist") for pkg, ver in packagist_packages.items()]
         + [_query_osv(pkg, ver, "NuGet") for pkg, ver in nuget_packages.items()]
         + [_query_osv(pkg, ver, "Pub") for pkg, ver in pub_packages.items()]
+        + [_query_osv(pkg, ver, "RubyGems") for pkg, ver in rubygems_packages.items()]
+        + [_query_osv(pkg, ver, "Hex") for pkg, ver in hex_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

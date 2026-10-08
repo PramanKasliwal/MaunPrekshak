@@ -25,7 +25,8 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
-    "MP051", "K8S001", "K8S006", "K8S007", "K8S009",
+    "MP051", "MP054", "MP059", "MP060",
+    "K8S001", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
     "TF004", "TF005", "TF006", "DF002",
 }
 
@@ -126,6 +127,20 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                 if re.search(r"\ballow_pickle\s*=\s*(?:True|1)\b", new_line):
                     new_line = re.sub(r"\ballow_pickle\s*=\s*(?:True|1)\b", "allow_pickle=False", new_line)
 
+            elif finding.check_id == "MP054":
+                if re.search(r"\bresolve_entities\s*=\s*(?:True|1)\b", new_line):
+                    new_line = re.sub(r"\bresolve_entities\s*=\s*(?:True|1)\b", "resolve_entities=False", new_line)
+
+            elif finding.check_id == "MP059":
+                if re.search(r"\bhttponly\s*=\s*False\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"\bhttponly\s*=\s*False\b", "httponly=True", new_line, flags=re.IGNORECASE)
+                if re.search(r"\bsecure\s*=\s*False\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"\bsecure\s*=\s*False\b", "secure=True", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "MP060":
+                if re.search(r"\bcheck_hostname\s*=\s*False\b", new_line):
+                    new_line = re.sub(r"\bcheck_hostname\s*=\s*False\b", "check_hostname = True", new_line)
+
             elif finding.check_id == "K8S001":
                 if re.search(r"\bprivileged\s*:\s*true\b", new_line, re.IGNORECASE):
                     new_line = re.sub(r"(\bprivileged\s*:\s*)true\b", r"\1false", new_line, flags=re.IGNORECASE)
@@ -142,6 +157,14 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                 for prop in ("hostNetwork", "hostPID", "hostIPC"):
                     if re.search(rf"\b{prop}\s*:\s*true\b", new_line, re.IGNORECASE):
                         new_line = re.sub(rf"(\b{prop}\s*:\s*)true\b", r"\1false", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "K8S011":
+                if re.search(r"(\btype\s*:\s*)Unconfined\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"(\btype\s*:\s*)Unconfined\b", r"\1RuntimeDefault", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "K8S019":
+                if re.search(r"(\bimagePullPolicy\s*:\s*)Never\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"(\bimagePullPolicy\s*:\s*)Never\b", r"\1Always", new_line, flags=re.IGNORECASE)
 
             elif finding.check_id == "TF004":
                 new_line = re.sub(

@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-10-09
+
+### Added
+- **Multi-Ecosystem SCA Phase 4 (Ruby Gemfile & Elixir Mix)**:
+  - Native manifest parsing for Ruby: `Gemfile` dependency statements and `Gemfile.lock` resolved specifications.
+  - Native manifest parsing for Elixir & Erlang: `mix.exs` project dependencies and `mix.lock` pinned packages.
+  - Concurrent asynchronous vulnerability querying against OSV.dev for `"RubyGems"` and `"Hex"` ecosystems with CVSS scoring, severity classification, and minimum safe version resolution.
+- **Kubernetes & Cloud-Native Hardening Phase 2 (`K8S015`–`K8S020`)**:
+  - Six enterprise cloud-native security checks for Kubernetes manifests and Helm charts:
+    - **K8S015** (HIGH): Mutable or untagged container image detected (`:latest` tag or omitted image tag) risking supply-chain drift and image tampering.
+    - **K8S016** (MEDIUM): Missing health check probes (`livenessProbe` and `readinessProbe`) risking traffic blackholing and cascading service outages.
+    - **K8S017** (CRITICAL): Container runtime socket mounted into container (`docker.sock`, `containerd.sock`, `crio.sock`) enabling host breakout and cluster takeover.
+    - **K8S018** (MEDIUM): Container capability `NET_RAW` not dropped (CIS Benchmark 5.2.7), allowing ARP spoofing and raw packet sniffing.
+    - **K8S019** (HIGH): Insecure `imagePullPolicy: Never` preventing Kubernetes from pulling verified image updates.
+    - **K8S020** (LOW): Explicit assignment of `default` ServiceAccount lacking least privilege principle.
+- **Advanced Python SAST Suite (`MP056`–`MP062`)**:
+  - Seven dedicated AST security rules targeting web framework and runtime anti-patterns:
+    - **MP056** (HIGH): Dynamic interactive code execution via `code.InteractiveInterpreter`, `code.InteractiveConsole`, `code.compile_command`, or built-in `compile()` with non-constant input.
+    - **MP057** (HIGH): Hardcoded web session secret keys (`app.secret_key = "..."`, `app.config['SECRET_KEY'] = "..."`, `SessionMiddleware(secret_key="...")`).
+    - **MP058** (HIGH): Insecure deserialization via `shelve.open()` or `marshal.load()`/`loads()`.
+    - **MP059** (HIGH): Insecure cookie flags (`httponly=False` or `secure=False` in `set_cookie()`).
+    - **MP060** (HIGH): Disabled SSL/TLS certificate verification or hostname verification (`check_hostname = False`, `verify_mode = ssl.CERT_NONE`, `ssl._create_unverified_context()`).
+    - **MP061** (HIGH): GraphQL query injection via dynamic string formatting / f-strings into `gql()`.
+    - **MP062** (MEDIUM): Insecure temporary file path constructed via `os.path.join(tempfile.gettempdir(), ...)` vulnerable to TOCTOU symlink races.
+- **Enterprise DevOps & Cloud Secrets Detection (`MP-SEC-027`–`MP-SEC-032`)**:
+  - High-fidelity token patterns for:
+    - GitLab Pipeline Trigger and Runner Registration Tokens (`glptt-`, `glrt-`).
+    - Atlassian / Jira API Tokens.
+    - Sentry Auth Tokens (`sntrys_`).
+    - Shopify Access and Custom App Tokens (`shpat_`, `shpca_`).
+    - Linear API Keys (`lin_api_`).
+    - Cloudflare API Tokens (`cfe_`).
+- **Mechanical Auto-Fixing Engine Phase 4 (`--fix` Expansion)**:
+  - Extended `--fix` to automatically and safely remediate:
+    - **MP054**: `resolve_entities=True` → `resolve_entities=False`.
+    - **MP059**: `secure=False` → `secure=True`, `httponly=False` → `httponly=True`.
+    - **MP060**: `check_hostname = False` → `check_hostname = True`.
+    - **K8S011**: `type: Unconfined` → `type: RuntimeDefault`.
+    - **K8S019**: `imagePullPolicy: Never` → `imagePullPolicy: Always`.
+
 ## [0.14.0] - 2026-10-04
 
 ### Added

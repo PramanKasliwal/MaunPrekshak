@@ -894,6 +894,79 @@ class SecurityVisitor(ast.NodeVisitor):
                                   "lxml XMLParser configured with resolve_entities=True enables XML External Entity (XXE) attacks",
                                   "Set resolve_entities=False (or use defusedxml) to prevent XXE file disclosure and server-side request forgery.")
 
+        # MP056 — Dynamic Code Compilation via code.InteractiveInterpreter / compile()
+        if (
+            (obj == "code" and method in ("InteractiveInterpreter", "InteractiveConsole", "compile_command"))
+            or full_func in ("code.InteractiveInterpreter", "code.InteractiveConsole", "code.compile_command")
+        ):
+            self._add(node, "MP056", Severity.HIGH.value,
+                      f"Dynamic interactive code execution via code.{method}()",
+                      "Avoid executing arbitrary code dynamically using the 'code' module. Use isolated sandboxes or AST validation.")
+        elif func_name == "compile" and len(node.args) >= 3:
+            mode_arg = node.args[2]
+            if isinstance(mode_arg, ast.Constant) and mode_arg.value in ("exec", "eval", "single"):
+                if not isinstance(node.args[0], ast.Constant):
+                    self._add(node, "MP056", Severity.HIGH.value,
+                              "Dynamic code compilation via compile() with untrusted source code",
+                              "Do not dynamically compile untrusted strings into executable Python bytecode.")
+
+        # MP057 — Hardcoded web session secret key in middleware parameters
+        for kw in node.keywords:
+            if kw.arg in ("secret_key", "session_secret") and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                if kw.value.value:
+                    self._add(node, "MP057", Severity.HIGH.value,
+                              f"Hardcoded web session secret key in '{kw.arg}' parameter",
+                              "Load secret keys from environment variables rather than hardcoding string literals.")
+
+        # MP058 — Insecure Deserialization via shelve / marshal
+        if (obj == "shelve" and method in ("open",)) or full_func in ("shelve.open",):
+            self._add(node, "MP058", Severity.HIGH.value,
+                      "Insecure deserialization via shelve.open() can lead to arbitrary code execution",
+                      "Do not use shelve with untrusted data files. Use SQLite or JSON instead.")
+        elif (obj == "marshal" and method in ("load", "loads")) or full_func in ("marshal.load", "marshal.loads"):
+            self._add(node, "MP058", Severity.HIGH.value,
+                      f"Insecure deserialization via marshal.{method}() can execute arbitrary code or crash the interpreter",
+                      "Do not load untrusted marshal data. Use safe serialization formats like json.")
+
+        # MP059 — Insecure Cookie Configuration
+        if method == "set_cookie" or func_name == "set_cookie":
+            for kw in node.keywords:
+                if kw.arg in ("httponly", "http_only") and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    self._add(node, "MP059", Severity.HIGH.value,
+                              "Insecure cookie configuration: 'httponly=False' exposes cookies to XSS theft",
+                              "Set httponly=True to protect cookies from JavaScript access.")
+                elif kw.arg == "secure" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    self._add(node, "MP059", Severity.HIGH.value,
+                              "Insecure cookie configuration: 'secure=False' transmits cookies over unencrypted plaintext HTTP",
+                              "Set secure=True to restrict cookie transmission to HTTPS connections only.")
+
+        # MP060 — Insecure SSL unverified context
+        if (obj == "ssl" and method == "_create_unverified_context") or full_func == "ssl._create_unverified_context":
+            self._add(node, "MP060", Severity.HIGH.value,
+                      "Insecure SSL context: ssl._create_unverified_context() disables certificate verification",
+                      "Use ssl.create_default_context() to ensure TLS certificates are strictly validated.")
+
+        # MP061 — GraphQL query injection
+        if func_name == "gql" and node.args:
+            q_arg = node.args[0]
+            if isinstance(q_arg, (ast.JoinedStr, ast.BinOp)) or (
+                isinstance(q_arg, ast.Call) and isinstance(q_arg.func, ast.Attribute) and q_arg.func.attr == "format"
+            ):
+                self._add(node, "MP061", Severity.HIGH.value,
+                          "GraphQL query injection: gql() query constructed via dynamic string formatting",
+                          "Use parameterized GraphQL query variables ($variable: Type) instead of string formatting or concatenation.")
+
+        # MP062 — Insecure Temporary File Path Handling
+        if (obj in ("path", "os.path") and method == "join") or full_func in ("os.path.join",):
+            for arg in node.args:
+                if isinstance(arg, ast.Call):
+                    a_obj, a_meth = self._get_attr_chain(arg)
+                    a_full = self._get_full_func_name(arg)
+                    if (a_obj == "tempfile" and a_meth == "gettempdir") or a_full == "tempfile.gettempdir":
+                        self._add(node, "MP062", Severity.MEDIUM.value,
+                                  "Insecure temporary file path constructed via os.path.join(tempfile.gettempdir(), ...) — predictable file and TOCTOU risk",
+                                  "Use tempfile.NamedTemporaryFile() or tempfile.TemporaryDirectory() for secure temporary file creation.")
+
     def _has_password_identifier(self, node: ast.AST) -> bool:
         """Check if an AST node contains or references a password identifier."""
         if isinstance(node, ast.Name):
@@ -966,6 +1039,35 @@ class SecurityVisitor(ast.NodeVisitor):
                                           f"Cryptographically insecure PRNG (random.{sub_meth or 'choice'}) used to generate security-sensitive value '{target.id}'",
                                           "Use Python's 'secrets' module (secrets.token_hex, secrets.token_urlsafe, secrets.choice, secrets.randbelow) for CSPRNG security.")
                                 break
+
+            # MP057 — Hardcoded web session secret key in assignments
+            is_secret_key = False
+            if isinstance(target, ast.Attribute) and target.attr in ("secret_key", "SECRET_KEY"):
+                is_secret_key = True
+            elif isinstance(target, ast.Subscript):
+                if isinstance(target.slice, ast.Constant) and target.slice.value in ("SECRET_KEY", "secret_key"):
+                    if not (isinstance(target.value, ast.Attribute) and getattr(target.value, "attr", None) == "environ"):
+                        is_secret_key = True
+            if is_secret_key and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                val = node.value.value
+                if val and not (val.startswith("{{") or val.startswith("$")):
+                    self._add(node, "MP057", Severity.HIGH.value,
+                              "Hardcoded web session secret key: storing static secret keys compromises session authenticity",
+                              "Load secret keys securely from environment variables (e.g. os.getenv('SECRET_KEY')).")
+
+            # MP060 — Disabled TLS certificate or hostname verification via attribute assignment
+            if isinstance(target, ast.Attribute):
+                if target.attr == "check_hostname" and isinstance(node.value, ast.Constant) and node.value.value is False:
+                    self._add(node, "MP060", Severity.HIGH.value,
+                              "TLS hostname verification explicitly disabled (check_hostname = False) — vulnerable to MitM attacks",
+                              "Keep check_hostname = True to ensure certificates match the target hostname.")
+                elif target.attr == "verify_mode":
+                    if (isinstance(node.value, ast.Attribute) and node.value.attr == "CERT_NONE") or (
+                        isinstance(node.value, ast.Constant) and node.value.value == 0
+                    ):
+                        self._add(node, "MP060", Severity.HIGH.value,
+                                  "TLS certificate verification explicitly disabled (verify_mode = ssl.CERT_NONE) — vulnerable to MitM attacks",
+                                  "Enforce certificate verification: set verify_mode = ssl.CERT_REQUIRED.")
 
         self.generic_visit(node)
 

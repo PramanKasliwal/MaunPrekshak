@@ -38,6 +38,12 @@ PATTERNS = {
     "GitHub Copilot / App Token": r"\bgh[us]_[A-Za-z0-9]{36}\b",
     "Kubernetes Service Account Token": r"(?i)bearer\s+eyJh[A-Za-z0-9_\-\.]{50,}",
     "Databricks API Token": r"\bdapi[a-f0-9]{32}\b",
+    "GitLab Pipeline / Runner Token": r"\b(?:glptt|glrt)-[0-9a-zA-Z_\-]{20,}\b",
+    "Atlassian API Token": r"(?i)(?:atlassian|jira|confluence).*(?:api_key|token|password)\s*[:=]\s*['\"][A-Za-z0-9]{24}['\"]",
+    "Sentry Auth Token": r"\bsntrys_[a-f0-9]{64}\b",
+    "Shopify Access Token": r"\bshp(?:at|ca)_[a-fA-F0-9]{32}\b",
+    "Linear API Key": r"\blin_api_[a-zA-Z0-9]{40}\b",
+    "Cloudflare API Token": r"\bcfe_[A-Za-z0-9_-]{40}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 
