@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-10-10
+
+### Added
+- **Multi-Ecosystem SCA Phase 5 (Swift Package Manager & C/C++ Conan)**:
+  - Native manifest parsing for Swift: `Package.swift` dependency declarations and `Package.resolved` (v1 and v2 JSON) pinned dependency graphs.
+  - Native manifest parsing for C/C++ Conan: `conanfile.txt` package references and `conan.lock` dependency lockfiles.
+  - Concurrent asynchronous vulnerability querying against OSV.dev for `"SwiftURL"` and `"Conan"` ecosystems with CVSS scoring, severity classification, and minimum safe version resolution.
+- **Enterprise CI/CD Security Suite (GitHub Actions & GitLab CI)**:
+  - **`GHA006`** (HIGH): Self-hosted runner without ephemeral isolation (`runs-on: self-hosted`) risking cross-job credential theft and persistent host compromise.
+  - **`GHA007`** (HIGH): Runner environment delimiter injection via unescaped variable interpolation into `$GITHUB_ENV` or `$GITHUB_OUTPUT`.
+  - **`GHA008`** (MEDIUM): Unconstrained or runaway job timeout (`timeout-minutes: 0` or missing timeout on self-hosted runners).
+  - Native static analysis for GitLab CI pipelines (`.gitlab-ci.yml`):
+    - **`GLCI001`** (HIGH): Untrusted CI/CD variable interpolation in runner scripts (`$CI_COMMIT_MESSAGE`, `$CI_MERGE_REQUEST_TITLE`).
+    - **`GLCI002`** (HIGH): Dangerous Docker-in-Docker service configuration (`docker:*-dind` with privileged runner access).
+    - **`GLCI003`** (MEDIUM): Mutable or unpinned runner image tag (`:latest` or missing version tag).
+    - **`GLCI004`** (HIGH): Plaintext secrets and sensitive credentials exposed in `variables:` block.
+- **Advanced Python SAST Suite (`MP063`–`MP068`)**:
+  - Six dedicated AST security rules targeting authentication, archive extraction, and query safety:
+    - **MP063** (CRITICAL): JWT signature verification bypass (`options={"verify_signature": False}`, `verify=False`, or allowing the `"none"` algorithm in `jwt.decode()`).
+    - **MP064** (HIGH): Zip Slip directory traversal vulnerability via unvalidated `zipfile.ZipFile.extractall()` or `extract()`.
+    - **MP065** (HIGH): Insecure temporary directory creation in shared directories (`/tmp`, `/var/tmp`) without atomic isolation (`os.mkdir` / `os.makedirs`).
+    - **MP066** (HIGH): Raw SQL query injection in ORM wrappers (`sqlalchemy.text(f"...")`, `Model.objects.raw(f"...")`, `cursor.execute(f"...")`).
+    - **MP067** (HIGH): Insecure subprocess execution with `shell=True` and formatted command strings (`subprocess.Popen(f"...", shell=True)`).
+    - **MP068** (MEDIUM): Insecure YAML loader (`yaml.FullLoader` / `Loader=yaml.FullLoader`) vulnerable to arbitrary code execution (CVE-2020-14343).
+- **Enterprise Cloud & Developer Secrets Detection (`MP-SEC-033`–`MP-SEC-038`)**:
+  - High-fidelity token patterns for:
+    - Vercel Access Tokens (`vercel_`).
+    - Doppler Service Tokens (`dp.st.`).
+    - Resend API Keys (`re_`).
+    - PostHog API Keys (`phc_`).
+    - Terraform Cloud / Atlas User Tokens (`.atlasv1.`).
+    - Heroku API Keys.
+- **Mechanical Auto-Fixing Engine Phase 5 (`--fix` Expansion)**:
+  - Extended `--fix` to automatically and safely remediate:
+    - **GHA004**: `permissions: write-all` → `permissions: read-all`.
+    - **K8S003**: `runAsNonRoot: false` → `runAsNonRoot: true`.
+    - **MP063**: `verify_signature: False` → `verify_signature: True`.
+    - **MP068**: `Loader=yaml.FullLoader` → `Loader=yaml.SafeLoader`.
+
 ## [0.15.0] - 2026-10-09
 
 ### Added

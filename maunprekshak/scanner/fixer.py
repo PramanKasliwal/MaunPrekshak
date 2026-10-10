@@ -9,10 +9,19 @@ Supports:
 - MP033: os.chmod(..., 0o777) -> 0o700 / 0o666 -> 0o600
 - MP036: yaml.unsafe_load(...) -> yaml.safe_load(...) / Loader=yaml.SafeLoader
 - MP051: numpy.load(..., allow_pickle=True) -> allow_pickle=False
+- MP054: resolve_entities=True -> resolve_entities=False
+- MP059: httponly/secure=False -> True
+- MP060: check_hostname=False -> True
+- MP063: verify_signature/verify=False -> True
+- MP068: Loader=yaml.FullLoader -> yaml.SafeLoader
 - K8S001: privileged: true -> privileged: false
+- K8S003: runAsNonRoot: false -> runAsNonRoot: true
 - K8S006: allowPrivilegeEscalation: true -> allowPrivilegeEscalation: false
 - K8S007: readOnlyRootFilesystem: false -> readOnlyRootFilesystem: true
 - K8S009: hostNetwork/hostPID/hostIPC: true -> false
+- K8S011: type: Unconfined -> type: RuntimeDefault
+- K8S019: imagePullPolicy: Never -> imagePullPolicy: Always
+- GHA004: permissions: write-all -> permissions: read-all
 - TF004: storage_encrypted / encrypted = false -> true
 - TF005: publicly_accessible = true -> false
 - TF006: block_public_acls = false -> true
@@ -25,9 +34,9 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
-    "MP051", "MP054", "MP059", "MP060",
-    "K8S001", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
-    "TF004", "TF005", "TF006", "DF002",
+    "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
+    "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
+    "GHA004", "TF004", "TF005", "TF006", "DF002",
 }
 
 
@@ -141,9 +150,22 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                 if re.search(r"\bcheck_hostname\s*=\s*False\b", new_line):
                     new_line = re.sub(r"\bcheck_hostname\s*=\s*False\b", "check_hostname = True", new_line)
 
+            elif finding.check_id == "MP063":
+                if "verify_signature" in new_line:
+                    new_line = re.sub(r"(['\"]verify_signature['\"]\s*:\s*)False\b", r"\1True", new_line)
+                if re.search(r"\bverify\s*=\s*False\b", new_line):
+                    new_line = re.sub(r"\bverify\s*=\s*False\b", "verify=True", new_line)
+
+            elif finding.check_id == "MP068":
+                new_line = re.sub(r"\bLoader\s*=\s*yaml\.(?:FullLoader|UnsafeLoader|Loader)\b", "Loader=yaml.SafeLoader", new_line)
+
             elif finding.check_id == "K8S001":
                 if re.search(r"\bprivileged\s*:\s*true\b", new_line, re.IGNORECASE):
                     new_line = re.sub(r"(\bprivileged\s*:\s*)true\b", r"\1false", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "K8S003":
+                if re.search(r"\brunAsNonRoot\s*:\s*false\b", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"(\brunAsNonRoot\s*:\s*)false\b", r"\1true", new_line, flags=re.IGNORECASE)
 
             elif finding.check_id == "K8S006":
                 if re.search(r"\ballowPrivilegeEscalation\s*:\s*true\b", new_line, re.IGNORECASE):
@@ -206,6 +228,9 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                             lines.append("USER 10001:10001\n")
                         applied += 1
                         modified = True
+
+            elif finding.check_id == "GHA004":
+                new_line = re.sub(r"\bpermissions:\s*write-all\b", "permissions: read-all", new_line, flags=re.IGNORECASE)
 
             if new_line != line:
                 lines[line_idx] = new_line

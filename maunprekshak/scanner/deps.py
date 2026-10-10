@@ -871,8 +871,127 @@ def parse_mix_lock(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_package_swift(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Swift Package.swift file and extract dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
 
-# ─── OSV.dev API ──────────────────────────────────────────────────────────────
+        for block in re.finditer(r"\.package\s*\(([^)]+)\)", content):
+            block_text = block.group(1)
+            url_match = re.search(r"""(?:url|path):\s*["']([^"']+)["']""", block_text)
+            name_match = re.search(r"""name:\s*["']([^"']+)["']""", block_text)
+            ver_match = re.search(r"""(?:from:\s*|exact:\s*|\.exact\s*\(\s*|["'])([0-9][0-9a-zA-Z\.\-]*)""", block_text)
+
+            pkg = ""
+            if name_match:
+                pkg = name_match.group(1).lower()
+            elif url_match:
+                raw_url = url_match.group(1).strip()
+                pkg = raw_url.rstrip("/").split("/")[-1]
+                if pkg.endswith(".git"):
+                    pkg = pkg[:-4]
+                pkg = pkg.lower()
+
+            ver = ver_match.group(1).strip() if ver_match else ""
+            if pkg:
+                packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_package_resolved(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Swift Package.resolved file (V1 or V2 JSON) and extract pinned packages and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+
+        pins = []
+        if isinstance(data, dict):
+            if "pins" in data and isinstance(data["pins"], list):
+                pins = data["pins"]
+            elif "object" in data and isinstance(data["object"], dict) and "pins" in data["object"]:
+                pins = data["object"]["pins"]
+
+        for pin in pins:
+            pkg = pin.get("identity") or pin.get("package") or ""
+            if not pkg and pin.get("location"):
+                pkg = pin["location"].rstrip("/").split("/")[-1]
+                if pkg.endswith(".git"):
+                    pkg = pkg[:-4]
+            state = pin.get("state", {})
+            ver = state.get("version") or ""
+            if pkg:
+                packages.append((str(pkg).lower(), str(ver)))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_conanfile_txt(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a C/C++ conanfile.txt and extract packages in [requires] section.
+    """
+    packages: List[tuple[str, str]] = []
+    in_requires = False
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                if raw.startswith("["):
+                    in_requires = (raw.lower() == "[requires]")
+                    continue
+                if in_requires:
+                    match = re.match(r"^([a-zA-Z0-9_\-\.]+)/([0-9a-zA-Z\.\-]+)", raw)
+                    if match:
+                        pkg = match.group(1).lower()
+                        ver = match.group(2).strip()
+                        packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_conan_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a C/C++ conan.lock file and extract locked package names and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+
+        refs = []
+        if isinstance(data, dict):
+            graph = data.get("graph_lock", {})
+            nodes = graph.get("nodes", {})
+            for node in nodes.values():
+                if isinstance(node, dict) and "ref" in node:
+                    refs.append(node["ref"])
+            if "requires" in data and isinstance(data["requires"], list):
+                refs.extend(data["requires"])
+
+        for ref in refs:
+            clean_ref = ref.split("#")[0]
+            match = re.match(r"^([a-zA-Z0-9_\-\.]+)/([0-9a-zA-Z\.\-]+)", clean_ref)
+            if match:
+                pkg = match.group(1).lower()
+                ver = match.group(2).strip()
+                packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
 
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
@@ -1001,6 +1120,8 @@ async def scan_dependencies(
     pub_packages: Dict[str, str] = {}
     rubygems_packages: Dict[str, str] = {}
     hex_packages: Dict[str, str] = {}
+    swift_packages: Dict[str, str] = {}
+    conan_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1049,6 +1170,14 @@ async def scan_dependencies(
     hex_parsers = [
         ("mix.lock", parse_mix_lock),
         ("mix.exs", parse_mix_exs),
+    ]
+    swift_parsers = [
+        ("Package.resolved", parse_package_resolved),
+        ("Package.swift", parse_package_swift),
+    ]
+    conan_parsers = [
+        ("conan.lock", parse_conan_lock),
+        ("conanfile.txt", parse_conanfile_txt),
     ]
 
     for filename, parser in python_parsers:
@@ -1221,7 +1350,37 @@ async def scan_dependencies(
                 if pkg not in hex_packages or (ver and not hex_packages[pkg]):
                     hex_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages):
+    for filename, parser in swift_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in swift_packages or (ver and not swift_packages[pkg]):
+                    swift_packages[pkg] = ver
+
+    for filename, parser in conan_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in conan_packages or (ver and not conan_packages[pkg]):
+                    conan_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -1236,6 +1395,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "Pub") for pkg, ver in pub_packages.items()]
         + [_query_osv(pkg, ver, "RubyGems") for pkg, ver in rubygems_packages.items()]
         + [_query_osv(pkg, ver, "Hex") for pkg, ver in hex_packages.items()]
+        + [_query_osv(pkg, ver, "SwiftURL") for pkg, ver in swift_packages.items()]
+        + [_query_osv(pkg, ver, "Conan") for pkg, ver in conan_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

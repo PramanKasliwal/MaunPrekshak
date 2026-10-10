@@ -44,6 +44,12 @@ PATTERNS = {
     "Shopify Access Token": r"\bshp(?:at|ca)_[a-fA-F0-9]{32}\b",
     "Linear API Key": r"\blin_api_[a-zA-Z0-9]{40}\b",
     "Cloudflare API Token": r"\bcfe_[A-Za-z0-9_-]{40}\b",
+    "Vercel Access Token": r"\bvercel_[a-zA-Z0-9]{24}\b",
+    "Doppler Service Token": r"\bdp\.st\.(?:[a-z0-9_\-]+)\.[a-zA-Z0-9]{40,}\b",
+    "Resend API Key": r"\bre_[0-9a-zA-Z]{24,32}\b",
+    "PostHog API Key": r"\bphc_[a-zA-Z0-9]{43}\b",
+    "Terraform Cloud / Atlas Token": r"\b[a-zA-Z0-9]{14}\.atlasv1\.[a-zA-Z0-9]{60,70}\b",
+    "Heroku API Key": r"(?i)(?:heroku.*api_key|HEROKU_API_KEY)\s*[:=]\s*['\"][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}['\"]",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

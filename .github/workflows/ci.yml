@@ -11,6 +11,7 @@ jobs:
   security_audit:
     name: Secrets & Supply Chain Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -37,6 +38,7 @@ jobs:
   test_matrix:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [security_audit]
     strategy:
       fail-fast: false

@@ -66,6 +66,19 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP053  Insecure RSA PKCS1v15 padding MEDIUM
 # MP054  Insecure XML entity resolution HIGH
 # MP055  Deprecated TLS/SSL protocol   MEDIUM
+# MP056  Dynamic code compilation      HIGH
+# MP057  Hardcoded web session secrets HIGH
+# MP058  shelve/marshal deserialization HIGH
+# MP059  Insecure cookie flags         HIGH
+# MP060  Disabled TLS verification     HIGH
+# MP061  GraphQL query injection       HIGH
+# MP062  Insecure tempfile path        MEDIUM
+# MP063  JWT signature bypass / None   CRITICAL
+# MP064  Zip Slip extraction           HIGH
+# MP065  Insecure temp directory       HIGH
+# MP066  Raw SQL injection in ORM      HIGH
+# MP067  subprocess with shell=True    HIGH
+# MP068  Insecure YAML FullLoader      MEDIUM
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -966,6 +979,117 @@ class SecurityVisitor(ast.NodeVisitor):
                         self._add(node, "MP062", Severity.MEDIUM.value,
                                   "Insecure temporary file path constructed via os.path.join(tempfile.gettempdir(), ...) — predictable file and TOCTOU risk",
                                   "Use tempfile.NamedTemporaryFile() or tempfile.TemporaryDirectory() for secure temporary file creation.")
+
+        # MP063 — JWT Signature Verification Bypass / None Algorithm
+        if method == "decode" or func_name == "decode" or full_func in ("jwt.decode", "jose.jwt.decode"):
+            for kw in node.keywords:
+                if kw.arg == "options" and isinstance(kw.value, ast.Dict):
+                    for k, v in zip(kw.value.keys, kw.value.values):
+                        if isinstance(k, ast.Constant) and k.value == "verify_signature":
+                            if isinstance(v, ast.Constant) and v.value is False:
+                                self._add(node, "MP063", Severity.CRITICAL.value,
+                                          "JWT signature verification explicitly disabled via options={'verify_signature': False}",
+                                          "Enforce signature verification: set 'verify_signature': True in decode options.")
+                elif kw.arg in ("verify", "verify_signature") and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    self._add(node, "MP063", Severity.CRITICAL.value,
+                              f"JWT signature verification explicitly disabled via {kw.arg}=False",
+                              "Enforce JWT signature verification: ensure verify=True.")
+                elif kw.arg == "algorithms":
+                    has_none_algo = False
+                    if isinstance(kw.value, (ast.List, ast.Tuple, ast.Set)):
+                        for elt in kw.value.elts:
+                            if isinstance(elt, ast.Constant) and str(elt.value).lower() == "none":
+                                has_none_algo = True
+                    elif isinstance(kw.value, ast.Constant) and str(kw.value.value).lower() == "none":
+                        has_none_algo = True
+                    if has_none_algo:
+                        self._add(node, "MP063", Severity.CRITICAL.value,
+                                  "JWT 'none' algorithm allowed in jwt.decode() — allows forging arbitrary unsigned tokens",
+                                  "Never allow the 'none' algorithm in JWT decode. Specify strong algorithms such as ['HS256'] or ['RS256'].")
+
+        # MP064 — Zip Slip Vulnerability (Unsafe ZipFile Extraction)
+        if (
+            (method in ("extractall", "extract") and (obj in ("zipfile", "ZipFile", "zf", "zip", "archive") or "zip" in obj.lower()))
+            or full_func in ("zipfile.ZipFile.extractall", "zipfile.ZipFile.extract")
+        ):
+            self._add(node, "MP064", Severity.HIGH.value,
+                      f"Unsafe zip extraction via {method}() without path traversal validation (Zip Slip vulnerability)",
+                      "Validate member filenames to ensure extracted paths do not escape the destination directory.")
+
+        # MP065 — Insecure Temporary Directory Creation
+        if (
+            (obj == "os" and method in ("mkdir", "makedirs"))
+            or full_func in ("os.mkdir", "os.makedirs")
+        ) and node.args:
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                val = first_arg.value
+                if val.startswith(("/tmp", "/var/tmp")):
+                    self._add(node, "MP065", Severity.HIGH.value,
+                              f"Insecure temporary directory creation in '{val}' without random suffix — vulnerable to symlink race attacks",
+                              "Use tempfile.TemporaryDirectory() or tempfile.mkdtemp() for safe temporary directory creation.")
+
+        # MP066 — Raw SQL Query Injection in ORM Wrappers
+        if (
+            (obj in ("sqlalchemy", "db", "session", "cursor", "objects", "Model") and method in ("text", "raw", "execute"))
+            or (func_name in ("text", "raw") and not obj)
+            or full_func in ("sqlalchemy.text",)
+        ) and node.args:
+            q_arg = node.args[0]
+            is_dynamic_sql = False
+            if isinstance(q_arg, ast.JoinedStr):
+                for part in q_arg.values:
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                        p_upper = part.value.strip().upper()
+                        if any(p_upper.startswith(k) for k in ("SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE")):
+                            is_dynamic_sql = True
+                            break
+            elif isinstance(q_arg, ast.BinOp) and isinstance(q_arg.op, ast.Mod):
+                if isinstance(q_arg.left, ast.Constant) and isinstance(q_arg.left.value, str):
+                    left_upper = q_arg.left.value.strip().upper()
+                    if any(left_upper.startswith(k) for k in ("SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER")):
+                        is_dynamic_sql = True
+            elif isinstance(q_arg, ast.Call) and isinstance(q_arg.func, ast.Attribute) and q_arg.func.attr == "format":
+                if isinstance(q_arg.func.value, ast.Constant) and isinstance(q_arg.func.value.value, str):
+                    fmt_upper = q_arg.func.value.value.strip().upper()
+                    if any(fmt_upper.startswith(k) for k in ("SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER")):
+                        is_dynamic_sql = True
+            if is_dynamic_sql:
+                self._add(node, "MP066", Severity.HIGH.value,
+                          f"Raw SQL query injection: {method or func_name}() constructed via dynamic string formatting",
+                          "Use bound parameters with parameterized SQL queries instead of string interpolation.")
+
+        # MP067 — Insecure Subprocess Execution with shell=True and Dynamic String
+        if (
+            (obj == "subprocess" and method in ("Popen", "run", "call", "check_output", "check_call"))
+            or full_func.startswith("subprocess.")
+        ):
+            has_shell_true = False
+            for kw in node.keywords:
+                if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    has_shell_true = True
+            if has_shell_true and node.args:
+                cmd_arg = node.args[0]
+                if isinstance(cmd_arg, (ast.JoinedStr, ast.BinOp)) or (
+                    isinstance(cmd_arg, ast.Call) and isinstance(cmd_arg.func, ast.Attribute) and cmd_arg.func.attr == "format"
+                ):
+                    self._add(node, "MP067", Severity.HIGH.value,
+                              f"Command injection vulnerability: subprocess.{method or 'run'}() called with shell=True and dynamic string",
+                              "Pass arguments as a list of strings with shell=False instead of string interpolation in a shell.")
+
+        # MP068 — Insecure YAML FullLoader
+        if (obj == "yaml" and method in ("load", "load_all")) or full_func in ("yaml.load", "yaml.load_all"):
+            for kw in node.keywords:
+                if kw.arg == "Loader":
+                    val_str = ""
+                    if isinstance(kw.value, ast.Attribute):
+                        val_str = kw.value.attr
+                    elif isinstance(kw.value, ast.Name):
+                        val_str = kw.value.id
+                    if val_str in ("FullLoader", "UnsafeLoader", "Loader"):
+                        self._add(node, "MP068", Severity.MEDIUM.value,
+                                  f"Insecure YAML loader 'yaml.{val_str}' vulnerable to arbitrary code execution (CVE-2020-14343)",
+                                  "Use yaml.safe_load() or Loader=yaml.SafeLoader.")
 
     def _has_password_identifier(self, node: ast.AST) -> bool:
         """Check if an AST node contains or references a password identifier."""
