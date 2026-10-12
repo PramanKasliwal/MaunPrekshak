@@ -163,7 +163,11 @@ Automatically patch safe, deterministic anti-patterns without breaking applicati
 - `TF004`: Terraform storage/database `storage_encrypted = false` -> `true`
 - `TF005`: Terraform database `publicly_accessible = true` -> `false`
 - `TF006`: Terraform S3 Public Access Block `block_public_* = false` -> `true`
+- `TF009`: Terraform S3 bucket key enabled: `bucket_key_enabled = false` -> `true`
 - `DF002`: Dockerfile missing non-root user -> injects `USER 10001:10001` before `CMD`/`ENTRYPOINT`
+- `DF006`: Dockerfile `ADD` -> `COPY` for local files
+- `MP069`: Jinja2 template autoescape: `autoescape=False` -> `autoescape=True`
+- `MP073`: Flask interactive debugger on `0.0.0.0` -> binds `host="127.0.0.1"`
 
 ```bash
 mp scan . --fix
@@ -352,6 +356,20 @@ Top Findings:
 | **DF004** | Dockerfile | HIGH | Sensitive remote administration port exposed (`22`, `23`, `3389`) |
 | **DF005** | Dockerfile | HIGH | Untrusted shell download execution (`curl` / `wget` piped to `sh`) |
 | **DF006** | Dockerfile | MEDIUM | Insecure archive extraction using `ADD` instead of `COPY` |
+| **DF007** | Dockerfile | HIGH | Insecure `sudo` or `su` invocation inside `RUN` commands |
+| **DF008** | Dockerfile | HIGH | Sensitive credential dotfiles or keys copied into container image |
+| **DF009** | Dockerfile | MEDIUM | Package manager installed without cache cleanup (`apk` / `yum` / `dnf`) |
+| **DF010** | Dockerfile | MEDIUM | Explicit `HEALTHCHECK NONE` disables container health monitoring |
+| **TF001** | Terraform / OpenTofu | HIGH | Security group ingress allowing open 0.0.0.0/0 on sensitive ports |
+| **TF002** | Terraform / OpenTofu | CRITICAL | Overly permissive IAM policy document with wildcard Action and Resource |
+| **TF003** | Terraform / OpenTofu | HIGH | S3 bucket or cloud storage with public-read ACL |
+| **TF004** | Terraform / OpenTofu | HIGH | Unencrypted database or storage volume (`storage_encrypted = false`) |
+| **TF005** | Terraform / OpenTofu | CRITICAL | Publicly accessible database instance (`publicly_accessible = true`) |
+| **TF006** | Terraform / OpenTofu | MEDIUM | S3 bucket public access block explicitly disabled |
+| **TF007** | Terraform / OpenTofu | HIGH | Hardcoded plaintext credentials or secret keys in Terraform files |
+| **TF008** | Terraform / OpenTofu | HIGH | Cloud storage container with public anonymous access enabled |
+| **TF009** | Terraform / OpenTofu | HIGH | S3 bucket server-side encryption disabled (`bucket_key_enabled = false`) |
+| **TF010** | Terraform / OpenTofu | CRITICAL | Security group ingress allows all traffic (`-1`/`all`) from 0.0.0.0/0 |
 
 ---
 

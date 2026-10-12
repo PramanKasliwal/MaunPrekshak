@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-10-11
+
+### Added
+- **Multi-Ecosystem SCA Phase 6 (C/C++ vcpkg & Haskell Hackage)**:
+  - Native manifest parsing for C/C++ `vcpkg.json`: extracts declared dependencies and exact version overrides for the `"vcpkg"` OSV ecosystem.
+  - Native manifest parsing for Haskell projects:
+    - `stack.yaml`: extracts `extra-deps` package specifications.
+    - `*.cabal`: parses `build-depends:` sections with bounded and pinned versions.
+    - `cabal.project.freeze`: extracts exact pinned package constraints.
+  - Concurrent asynchronous vulnerability querying against OSV.dev for `"vcpkg"` and `"Hackage"` ecosystems with CVSS scoring and remediation guidance.
+- **Cloud-Native & Container Security Expansion**:
+  - **`DF007`** (HIGH): Insecure `sudo` or `su` command invocation inside container `RUN` instructions (CWE-250).
+  - **`DF008`** (HIGH): Sensitive files or secret credentials (`.env`, `.git`, `.ssh`, `id_rsa`, `.aws`, `.kube`) copied directly into Docker container image (CWE-200).
+  - **`DF009`** (MEDIUM): Package manager installation without cache cleanup in Alpine (`apk add` without `--no-cache`) or RHEL/CentOS (`yum`/`dnf install` without `clean all`).
+  - **`DF010`** (MEDIUM): Explicit `HEALTHCHECK NONE` directive disabling container health monitoring (CWE-754).
+  - **`TF009`** (HIGH): AWS S3 bucket server-side encryption disabled (`bucket_key_enabled = false`).
+  - **`TF010`** (CRITICAL): AWS Security group ingress rule allowing all protocols (`-1`/`all`) from unrestricted internet (`0.0.0.0/0` or `::/0`).
+- **Advanced AST SAST Rules Phase 6 (`MP069`–`MP074`)**:
+  - **`MP069`** (HIGH): Jinja2 `Environment(autoescape=False)` disables HTML escaping, exposing applications to SSTI and cross-site scripting (XSS) (CWE-79, CWE-116).
+  - **`MP070`** (HIGH): Dangerous dynamic execution (`eval()` / `exec()`) inside comprehensions or lambdas (CWE-95).
+  - **`MP071`** (HIGH): Insecure cleartext network protocols (`ftplib.FTP` / `telnetlib.Telnet`) transmitting credentials over unencrypted channels (CWE-319).
+  - **`MP072`** (HIGH): NoSQL Injection: MongoDB `$where` clause constructed with dynamic string interpolation or formatting (CWE-943).
+  - **`MP073`** (MEDIUM): Flask interactive debugger bound to all network interfaces (`host='0.0.0.0'` with `debug=True`), enabling arbitrary code execution via Werkzeug console PIN (CWE-489).
+  - **`MP074`** (HIGH): Insecure IPC listener: `multiprocessing.connection.Listener` initialized without `authkey` allowing arbitrary connections and code execution via pickle (CWE-502).
+- **DevOps & Cloud Secrets Detection Phase 6 (`MP-SEC-039`–`MP-SEC-044`)**:
+  - High-fidelity token patterns for:
+    - Snyk API Tokens (`snyk_`).
+    - Square Access Tokens (`sq0atp-`, `sq0csp-`, `EAAA`).
+    - Coinbase API Keys.
+    - PlanetScale Service Tokens & Passwords (`pscale_tkn_`, `pscale_pw_`).
+    - LaunchDarkly SDK Keys (`sdk-`, `mob-`, `api-`).
+    - Grafana API & Service Account Tokens (`glsa_`).
+- **Mechanical Auto-Fixing Engine Phase 6 (`--fix` Expansion)**:
+  - `DF006`: Automatically transforms `ADD <src> <dest>` into `COPY <src> <dest>` for local non-archive files.
+  - `MP069`: Automatically replaces `autoescape=False` with `autoescape=True`.
+  - `MP073`: Automatically binds local interface `host="127.0.0.1"` instead of `0.0.0.0` when Flask `debug=True` is active.
+  - `TF009`: Automatically remediates disabled S3 bucket keys: `bucket_key_enabled = false` -> `bucket_key_enabled = true`.
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

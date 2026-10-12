@@ -176,6 +176,88 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                         code_snippet=raw_line.strip(),
                     ))
 
+        # DF007 — Insecure sudo or su in RUN instruction
+        if inst_upper.startswith("RUN "):
+            if re.search(r"(?:^|[\s;&|])(?:sudo|su)\s+", full_inst) and not _is_suppressed(raw_line, "DF007"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF007",
+                    severity=Severity.HIGH.value,
+                    description="Insecure sudo or su command invoked in RUN instruction",
+                    recommendation="Avoid sudo or su privilege elevation inside containers. Configure non-root user permissions directly.",
+                    code_snippet=raw_line.strip(),
+                ))
+
+        # DF008 — Sensitive files/directories copied into container
+        if inst_upper.startswith("COPY ") or inst_upper.startswith("ADD "):
+            parts = full_inst.split()
+            if len(parts) >= 2:
+                sources = parts[1:-1] if len(parts) >= 3 else parts[1:]
+                sensitive_targets = (".env", ".git", ".ssh", "id_rsa", "id_dsa", "id_ed25519", ".aws", ".kube", ".dockercfg")
+                for src in sources:
+                    clean_src = src.strip("'\"")
+                    src_base = os.path.basename(clean_src.rstrip("/\\"))
+                    src_lower = clean_src.lower()
+                    if (
+                        src_base in sensitive_targets
+                        or src_lower.endswith((".pem", ".key"))
+                        or any(t in src_lower for t in ("id_rsa", "id_dsa", "id_ed25519", "/.ssh", "/.aws", "/.kube", "/.env"))
+                    ) and not _is_suppressed(raw_line, "DF008"):
+                        findings.append(SASTFinding(
+                            file_path=file_path,
+                            line=line_num,
+                            col=1,
+                            check_id="DF008",
+                            severity=Severity.HIGH.value,
+                            description=f"Sensitive file or credential '{src}' copied directly into container image",
+                            recommendation="Never bake credentials or secret dotfiles into container images. Use runtime secrets or build secrets mount (--mount=type=secret).",
+                            code_snippet=raw_line.strip(),
+                        ))
+                        break
+
+        # DF009 — Package manager installed without cache cleanup
+        if inst_upper.startswith("RUN "):
+            if re.search(r"\bapk\s+add\b", full_inst, re.IGNORECASE) and "--no-cache" not in full_inst.lower():
+                if not _is_suppressed(raw_line, "DF009"):
+                    findings.append(SASTFinding(
+                        file_path=file_path,
+                        line=line_num,
+                        col=1,
+                        check_id="DF009",
+                        severity=Severity.MEDIUM.value,
+                        description="apk add executed without --no-cache flag in container build layer",
+                        recommendation="Use apk add --no-cache to avoid storing package index caches in image layers.",
+                        code_snippet=raw_line.strip(),
+                    ))
+            elif re.search(r"\b(?:yum|dnf)\s+install\b", full_inst, re.IGNORECASE) and "clean all" not in full_inst.lower():
+                if not _is_suppressed(raw_line, "DF009"):
+                    findings.append(SASTFinding(
+                        file_path=file_path,
+                        line=line_num,
+                        col=1,
+                        check_id="DF009",
+                        severity=Severity.MEDIUM.value,
+                        description="yum/dnf install executed without cleaning package caches (clean all)",
+                        recommendation="Append '&& yum clean all' (or dnf clean all) in the same RUN layer to reduce image footprint.",
+                        code_snippet=raw_line.strip(),
+                    ))
+
+        # DF010 — HEALTHCHECK NONE disables container health monitoring
+        if re.search(r"^\s*HEALTHCHECK\s+NONE\b", full_inst, re.IGNORECASE):
+            if not _is_suppressed(raw_line, "DF010"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF010",
+                    severity=Severity.MEDIUM.value,
+                    description="HEALTHCHECK NONE explicitly disables container health monitoring",
+                    recommendation="Define an active HEALTHCHECK instruction so orchestrators can determine container liveness.",
+                    code_snippet=raw_line.strip(),
+                ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1

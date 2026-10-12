@@ -25,7 +25,11 @@ Supports:
 - TF004: storage_encrypted / encrypted = false -> true
 - TF005: publicly_accessible = true -> false
 - TF006: block_public_acls = false -> true
+- TF009: bucket_key_enabled = false -> true
 - DF002: Missing non-root USER -> inject USER 10001:10001
+- DF006: ADD -> COPY for local files
+- MP069: autoescape=False -> autoescape=True
+- MP073: host='0.0.0.0' -> host='127.0.0.1'
 """
 import os
 import re
@@ -35,8 +39,9 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
+    "MP069", "MP073",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
-    "GHA004", "TF004", "TF005", "TF006", "DF002",
+    "GHA004", "TF004", "TF005", "TF006", "TF009", "DF002", "DF006",
 }
 
 
@@ -231,6 +236,19 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
 
             elif finding.check_id == "GHA004":
                 new_line = re.sub(r"\bpermissions:\s*write-all\b", "permissions: read-all", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF006":
+                if re.match(r"^\s*ADD\s+", new_line, re.IGNORECASE):
+                    new_line = re.sub(r"^\s*ADD\b", "COPY", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "MP069":
+                new_line = re.sub(r"\bautoescape\s*=\s*False\b", "autoescape=True", new_line)
+
+            elif finding.check_id == "MP073":
+                new_line = re.sub(r"""\bhost\s*=\s*["']0\.0\.0\.0["']""", 'host="127.0.0.1"', new_line)
+
+            elif finding.check_id == "TF009":
+                new_line = re.sub(r"\bbucket_key_enabled\s*=\s*false\b", "bucket_key_enabled = true", new_line, flags=re.IGNORECASE)
 
             if new_line != line:
                 lines[line_idx] = new_line

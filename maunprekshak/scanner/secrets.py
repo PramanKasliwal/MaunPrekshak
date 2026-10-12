@@ -50,6 +50,12 @@ PATTERNS = {
     "PostHog API Key": r"\bphc_[a-zA-Z0-9]{43}\b",
     "Terraform Cloud / Atlas Token": r"\b[a-zA-Z0-9]{14}\.atlasv1\.[a-zA-Z0-9]{60,70}\b",
     "Heroku API Key": r"(?i)(?:heroku.*api_key|HEROKU_API_KEY)\s*[:=]\s*['\"][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}['\"]",
+    "Snyk API Token": r"\bsnyk_[a-f0-9]{32}\b",
+    "Square Access Token": r"\b(?:sq0atp-[0-9A-Za-z\-_]{22}|sq0csp-[0-9A-Za-z\-_]{43}|EAAA[a-zA-Z0-9+/=]{60})\b",
+    "Coinbase API Key": r"(?i)(?:coinbase.*api_key|COINBASE_API_KEY)\s*[:=]\s*['\"][a-zA-Z0-9_\-]{16,64}['\"]",
+    "PlanetScale Service Token": r"\b(?:pscale_tkn|pscale_pw)_[a-zA-Z0-9_\.]{32,}\b",
+    "LaunchDarkly SDK Key": r"\b(?:sdk|mob|api)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+    "Grafana API Token": r"\bglsa_[A-Za-z0-9]{32}_[A-Za-z0-9]{8}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

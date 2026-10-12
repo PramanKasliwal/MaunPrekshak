@@ -992,6 +992,151 @@ def parse_conan_lock(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_vcpkg_json(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a C/C++ vcpkg.json manifest file and extract dependencies and version overrides.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            # Parse "dependencies"
+            deps = data.get("dependencies", [])
+            if isinstance(deps, list):
+                for dep in deps:
+                    if isinstance(dep, str):
+                        packages.append((dep.lower().strip(), ""))
+                    elif isinstance(dep, dict) and "name" in dep:
+                        pkg_name = str(dep["name"]).lower().strip()
+                        ver = ""
+                        for ver_key in ("version>=", "version", "version<=", "version="):
+                            if ver_key in dep:
+                                ver = str(dep[ver_key]).strip()
+                                break
+                        packages.append((pkg_name, ver))
+
+            # Parse "overrides"
+            overrides = data.get("overrides", [])
+            if isinstance(overrides, list):
+                for ov in overrides:
+                    if isinstance(ov, dict) and "name" in ov:
+                        pkg_name = str(ov["name"]).lower().strip()
+                        ver = str(ov.get("version", "")).strip()
+                        packages.append((pkg_name, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_stack_yaml(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Haskell stack.yaml file and extract extra-deps dependencies.
+    Example extra-deps:
+      - text-1.2.5.0
+      - aeson-2.1.2.1
+    """
+    packages: List[tuple[str, str]] = []
+    in_extra_deps = False
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.rstrip()
+                stripped = raw.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.startswith("extra-deps:"):
+                    in_extra_deps = True
+                    continue
+                if in_extra_deps:
+                    if raw and not raw[0].isspace() and not stripped.startswith("-"):
+                        in_extra_deps = False
+                        continue
+                    if stripped.startswith("-"):
+                        item = stripped.lstrip("- ").strip()
+                        if "-" in item and any(c.isdigit() for c in item):
+                            pkg_candidate, _, ver_candidate = item.rpartition("-")
+                            if pkg_candidate and ver_candidate and ver_candidate[0].isdigit():
+                                packages.append((pkg_candidate.lower(), ver_candidate))
+                                continue
+                        m_ver = re.match(r"^([a-zA-Z0-9_\-]+)\s*(?:==|>=|<=|\^>=)\s*([0-9][^\s,]*)", item)
+                        if m_ver:
+                            packages.append((m_ver.group(1).lower(), m_ver.group(2)))
+                        else:
+                            bare = re.match(r"^([a-zA-Z0-9_\-]+)$", item)
+                            if bare:
+                                packages.append((bare.group(1).lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_cabal_file(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Haskell *.cabal file and extract packages from build-depends sections.
+    """
+    packages: List[tuple[str, str]] = []
+    in_build_depends = False
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.rstrip()
+                stripped = raw.strip()
+                if not stripped or stripped.startswith("--"):
+                    continue
+                lower = stripped.lower()
+                if "build-depends:" in lower:
+                    in_build_depends = True
+                    rest = stripped.split(":", 1)[1].strip()
+                    if rest:
+                        tokens = [t.strip() for t in rest.split(",") if t.strip()]
+                        for tok in tokens:
+                            m = re.match(r"^([a-zA-Z0-9_\-]+)\s*(?:==|>=|<=|\^>=)\s*([0-9][0-9a-zA-Z\.\-]*)", tok)
+                            if m:
+                                packages.append((m.group(1).lower(), m.group(2)))
+                            else:
+                                bare = re.match(r"^([a-zA-Z0-9_\-]+)", tok)
+                                if bare:
+                                    packages.append((bare.group(1).lower(), ""))
+                    continue
+                if in_build_depends:
+                    if raw and not raw[0].isspace():
+                        in_build_depends = False
+                        continue
+                    tokens = [t.strip() for t in stripped.split(",") if t.strip()]
+                    for tok in tokens:
+                        m = re.match(r"^([a-zA-Z0-9_\-]+)\s*(?:==|>=|<=|\^>=)\s*([0-9][0-9a-zA-Z\.\-]*)", tok)
+                        if m:
+                            packages.append((m.group(1).lower(), m.group(2)))
+                        else:
+                            bare = re.match(r"^([a-zA-Z0-9_\-]+)", tok)
+                            if bare:
+                                packages.append((bare.group(1).lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_cabal_project_freeze(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Haskell cabal.project.freeze file and extract pinned package versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        matches = re.finditer(r"(?:any\.)?([a-zA-Z0-9_\-]+)\s*==\s*([0-9][0-9a-zA-Z\.\-]*)", content)
+        for m in matches:
+            pkg = m.group(1).lower()
+            ver = m.group(2).strip()
+            packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+
 
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
@@ -1122,6 +1267,8 @@ async def scan_dependencies(
     hex_packages: Dict[str, str] = {}
     swift_packages: Dict[str, str] = {}
     conan_packages: Dict[str, str] = {}
+    vcpkg_packages: Dict[str, str] = {}
+    hackage_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1178,6 +1325,13 @@ async def scan_dependencies(
     conan_parsers = [
         ("conan.lock", parse_conan_lock),
         ("conanfile.txt", parse_conanfile_txt),
+    ]
+    vcpkg_parsers = [
+        ("vcpkg.json", parse_vcpkg_json),
+    ]
+    hackage_parsers = [
+        ("cabal.project.freeze", parse_cabal_project_freeze),
+        ("stack.yaml", parse_stack_yaml),
     ]
 
     for filename, parser in python_parsers:
@@ -1380,7 +1534,56 @@ async def scan_dependencies(
                 if pkg not in conan_packages or (ver and not conan_packages[pkg]):
                     conan_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages):
+    for filename, parser in vcpkg_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in vcpkg_packages or (ver and not vcpkg_packages[pkg]):
+                    vcpkg_packages[pkg] = ver
+
+    for filename, parser in hackage_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in hackage_packages or (ver and not hackage_packages[pkg]):
+                    hackage_packages[pkg] = ver
+
+    cabal_files = []
+    if target_files is not None:
+        cabal_files = [f for f in target_files if f.endswith(".cabal")]
+    else:
+        try:
+            for root_dir, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "dist", "dist-newstyle", ".stack-work", "venv", ".venv")]
+                for file in files:
+                    if file.endswith(".cabal"):
+                        cabal_files.append(os.path.join(root_dir, file))
+        except Exception:
+            pass
+
+    for cabal_file in cabal_files:
+        if os.path.exists(cabal_file):
+            for pkg, ver in parse_cabal_file(cabal_file):
+                if pkg not in hackage_packages or (ver and not hackage_packages[pkg]):
+                    hackage_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -1397,6 +1600,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "Hex") for pkg, ver in hex_packages.items()]
         + [_query_osv(pkg, ver, "SwiftURL") for pkg, ver in swift_packages.items()]
         + [_query_osv(pkg, ver, "Conan") for pkg, ver in conan_packages.items()]
+        + [_query_osv(pkg, ver, "vcpkg") for pkg, ver in vcpkg_packages.items()]
+        + [_query_osv(pkg, ver, "Hackage") for pkg, ver in hackage_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

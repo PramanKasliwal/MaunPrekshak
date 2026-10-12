@@ -11,6 +11,8 @@ Rules:
   TF006 (MEDIUM)   - S3 bucket public access block explicitly disabled
   TF007 (HIGH)     - Hardcoded plaintext credentials or secret keys in Terraform files
   TF008 (HIGH)     - Cloud storage container with public access enabled
+  TF009 (HIGH)     - S3 bucket server-side encryption disabled (bucket_key_enabled = false)
+  TF010 (CRITICAL) - Security group ingress allows all traffic (-1/all) from unrestricted CIDR block
 """
 
 import os
@@ -94,6 +96,7 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
     sg_from_port = None
     sg_to_port = None
     sg_port_line = None
+    sg_protocol = None
 
     in_iam_policy = False
     has_wildcard_action = False
@@ -188,9 +191,23 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                     raw,
                 ))
 
-        # ─── TF001: Security Group Open Ingress Tracking ─────────────────────
+        # ─── TF009: S3 Bucket Server-Side Encryption Disabled ────────────────
+        if re.search(r"""(?:bucket_key_enabled)\s*=\s*false\b""", line_lower):
+            if not _is_suppressed(raw, "TF009"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF009", Severity.HIGH.value,
+                    "S3 bucket server-side encryption disabled (bucket_key_enabled = false)",
+                    "Enable server-side encryption with bucket_key_enabled = true and AES256 or aws:kms.",
+                    raw,
+                ))
+
+        # ─── TF001 & TF010: Security Group Open Ingress Tracking ─────────────
         if "ingress" in line_lower or "aws_security_group" in line_lower:
             in_security_group_or_ingress = True
+
+        proto_match = re.search(r"""protocol\s*=\s*["']?([^"'\s]+)["']?""", line_lower)
+        if proto_match:
+            sg_protocol = proto_match.group(1).strip()
 
         port_match = re.search(r"""(?:from_port|to_port)\s*=\s*(\d+)""", line_lower)
         if port_match:
@@ -201,8 +218,19 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                 sg_to_port = p
             sg_port_line = lineno
 
-        if 'cidr_blocks' in line_lower and ('"0.0.0.0/0"' in line or "'0.0.0.0/0'" in line):
-            # Check if associated with sensitive port or open range
+        has_open_cidr = ('"0.0.0.0/0"' in line or "'0.0.0.0/0'" in line or '"::/0"' in line or "'::/0'" in line)
+        if ('cidr_blocks' in line_lower or 'ipv6_cidr_blocks' in line_lower) and has_open_cidr:
+            # TF010: All protocols (-1 or all) open to world
+            if sg_protocol in ("-1", "all") and in_security_group_or_ingress:
+                if not _is_suppressed(raw, "TF010"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "TF010", Severity.CRITICAL.value,
+                        "Security group ingress rule allows all protocols (-1/all) from unrestricted internet (0.0.0.0/0 or ::/0)",
+                        "Restrict protocol to specific services and limit CIDR blocks to authorized networks.",
+                        raw,
+                    ))
+
+            # TF001: Sensitive port open to world
             is_sensitive = False
             port_name = "management/database"
             if sg_from_port is not None and sg_to_port is not None:
@@ -214,7 +242,7 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                 if sg_from_port == 0 and sg_to_port == 0:
                     is_sensitive = True
                     port_name = "ALL ports"
-            elif in_security_group_or_ingress:
+            elif in_security_group_or_ingress and sg_protocol not in ("-1", "all"):
                 is_sensitive = True
 
             if is_sensitive and not _is_suppressed(raw, "TF001"):
@@ -230,6 +258,7 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
 
         if line == "}" or line == "},":
             in_security_group_or_ingress = False
+            sg_protocol = None
 
         # ─── TF002: Overly Permissive IAM Policy Tracking ────────────────────
         if "aws_iam_policy" in line_lower or "policy" in line_lower:

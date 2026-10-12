@@ -79,6 +79,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP066  Raw SQL injection in ORM      HIGH
 # MP067  subprocess with shell=True    HIGH
 # MP068  Insecure YAML FullLoader      MEDIUM
+# MP069  Jinja2 autoescape=False       HIGH
+# MP070  eval/exec in comprehension    HIGH
+# MP071  Cleartext FTP/Telnet protocol HIGH
+# MP072  MongoDB $where injection      HIGH
+# MP073  Flask debug on 0.0.0.0        MEDIUM
+# MP074  IPC Listener without authkey  HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -88,6 +94,7 @@ class SecurityVisitor(ast.NodeVisitor):
         self.file_path = file_path
         self.source_lines = source_lines
         self.findings: List[SASTFinding] = []
+        self.in_comprehension_or_lambda: int = 0
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1090,6 +1097,102 @@ class SecurityVisitor(ast.NodeVisitor):
                         self._add(node, "MP068", Severity.MEDIUM.value,
                                   f"Insecure YAML loader 'yaml.{val_str}' vulnerable to arbitrary code execution (CVE-2020-14343)",
                                   "Use yaml.safe_load() or Loader=yaml.SafeLoader.")
+
+        # MP069 — Server-Side Template Injection / XSS: Jinja2 autoescape disabled
+        if (
+            (obj in ("jinja2", "Environment") and method == "Environment")
+            or full_func in ("jinja2.Environment", "jinja2.environment.Environment")
+            or func_name == "Environment"
+        ):
+            for kw in node.keywords:
+                if kw.arg == "autoescape" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    self._add(node, "MP069", Severity.HIGH.value,
+                              "Jinja2 Environment initialized with autoescape=False disables HTML escaping — vulnerable to SSTI and cross-site scripting (XSS)",
+                              "Enable autoescape (e.g. autoescape=True or autoescape=jinja2.select_autoescape()) to enforce automatic output escaping.")
+
+        # MP070 — Dangerous dynamic execution (eval/exec) inside comprehension or lambda
+        if self.in_comprehension_or_lambda > 0 and (
+            (func_name in ("eval", "exec") and not obj)
+            or full_func in ("builtins.eval", "builtins.exec")
+        ):
+            self._add(node, "MP070", Severity.HIGH.value,
+                      f"Dangerous dynamic code execution: {func_name}() executed inside comprehension or lambda expression",
+                      "Avoid evaluating dynamic code inside iterations or functional expressions. Use safe parsing routines.")
+
+        # MP071 — Cleartext Network Protocols (FTP / Telnet)
+        if (
+            (obj == "ftplib" and method == "FTP")
+            or full_func in ("ftplib.FTP", "telnetlib.Telnet")
+            or (obj == "telnetlib" and method == "Telnet")
+            or (func_name in ("FTP", "Telnet") and obj in ("ftplib", "telnetlib"))
+        ):
+            proto_name = "FTP" if "FTP" in (method or func_name) else "Telnet"
+            self._add(node, "MP071", Severity.HIGH.value,
+                      f"Insecure cleartext network protocol: {proto_name} transmits credentials and data over unencrypted channels",
+                      f"Use secure, encrypted protocols such as SFTP (paramiko/asyncssh) or SSH instead of cleartext {proto_name}.")
+
+        # MP073 — Flask Interactive Debugger Bound to 0.0.0.0
+        if method == "run" or func_name == "run":
+            has_debug_true = any(kw.arg == "debug" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in node.keywords)
+            has_open_host = any(kw.arg == "host" and isinstance(kw.value, ast.Constant) and kw.value.value in ("0.0.0.0", "::") for kw in node.keywords)
+            if has_debug_true and has_open_host:
+                self._add(node, "MP073", Severity.MEDIUM.value,
+                          "Flask interactive debugger bound to all network interfaces (host='0.0.0.0' with debug=True) — enables arbitrary code execution via debugger PIN",
+                          "Bind to localhost (host='127.0.0.1') during local debugging and disable debug mode (debug=False) in shared or production environments.")
+
+        # MP074 — Insecure IPC Listener without authkey
+        if (
+            (obj in ("connection", "multiprocessing.connection") and method == "Listener")
+            or full_func in ("multiprocessing.connection.Listener", "connection.Listener")
+            or func_name == "Listener"
+        ):
+            has_authkey = False
+            for kw in node.keywords:
+                if kw.arg == "authkey":
+                    if not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                        has_authkey = True
+            if not has_authkey:
+                self._add(node, "MP074", Severity.HIGH.value,
+                          "Insecure IPC listener: multiprocessing.connection.Listener without authkey allows unauthorized connections and code execution via pickle",
+                          "Provide a cryptographically secure authkey (e.g. authkey=secrets.token_bytes(32)) to authenticate client connections.")
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        # MP072 — NoSQL Injection (MongoDB $where clause)
+        for k, v in zip(node.keys, node.values):
+            if isinstance(k, ast.Constant) and k.value == "$where":
+                is_dynamic_where = isinstance(v, (ast.JoinedStr, ast.BinOp)) or (
+                    isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "format"
+                )
+                if is_dynamic_where:
+                    self._add(node, "MP072", Severity.HIGH.value,
+                              "NoSQL injection: MongoDB $where clause constructed with dynamic string interpolation",
+                              "Avoid using $where for evaluation; use standard query operators ($eq, $in, $regex) without Javascript execution.")
+        self.generic_visit(node)
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self.in_comprehension_or_lambda += 1
+        self.generic_visit(node)
+        self.in_comprehension_or_lambda -= 1
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self.in_comprehension_or_lambda += 1
+        self.generic_visit(node)
+        self.in_comprehension_or_lambda -= 1
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self.in_comprehension_or_lambda += 1
+        self.generic_visit(node)
+        self.in_comprehension_or_lambda -= 1
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.in_comprehension_or_lambda += 1
+        self.generic_visit(node)
+        self.in_comprehension_or_lambda -= 1
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self.in_comprehension_or_lambda += 1
+        self.generic_visit(node)
+        self.in_comprehension_or_lambda -= 1
 
     def _has_password_identifier(self, node: ast.AST) -> bool:
         """Check if an AST node contains or references a password identifier."""
