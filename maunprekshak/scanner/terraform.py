@@ -17,6 +17,10 @@ Rules:
   TF012 (HIGH)     - AWS RDS database storage missing customer-managed KMS encryption key
   TF013 (MEDIUM)   - AWS VPC default security group allows inbound or outbound traffic rules
   TF014 (HIGH)     - AWS EKS cluster endpoint publicly accessible without CIDR restriction
+  TF015 (HIGH)     - AWS Load Balancer listener configured with outdated SSL/TLS policy (TLS 1.0/1.1)
+  TF016 (HIGH)     - AWS S3 bucket versioning is disabled or suspended
+  TF017 (HIGH)     - AWS EBS default encryption disabled or volume missing customer KMS key
+  TF018 (MEDIUM)   - AWS SQS queue or SNS topic missing server-side KMS encryption
 """
 
 import os
@@ -112,6 +116,7 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
     rds_has_kms = False
 
     in_default_sg = False
+    in_ebs_default_encryption = False
 
     for idx, raw in enumerate(lines):
         lineno = idx + 1
@@ -263,6 +268,56 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                     file_path, lineno, "TF014", Severity.HIGH.value,
                     "AWS EKS cluster endpoint has unrestricted public access enabled (endpoint_public_access = true or 0.0.0.0/0)",
                     "Disable public endpoint access (endpoint_public_access = false) or restrict public_access_cidrs to specific trusted IP ranges.",
+                    raw,
+                ))
+
+        # ─── TF015: Insecure ALB/ELB Listener SSL Policy ─────────────────────
+        if re.search(r"""ssl_policy\s*=\s*["'](?:elbsecuritypolicy-tls-1-0|elbsecuritypolicy-2015-05|elbsecuritypolicy-2016-08|elbsecuritypolicy-tls-1-1-2017-01)["']""", line_lower):
+            if not _is_suppressed(raw, "TF015"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF015", Severity.HIGH.value,
+                    "AWS Load Balancer listener configured with outdated SSL/TLS policy (TLS 1.0/1.1)",
+                    "Update ssl_policy to ELBSecurityPolicy-TLS13-1-2-2021-06 or ELBSecurityPolicy-TLS-1-2-2017-01.",
+                    raw,
+                ))
+
+        # ─── TF016: AWS S3 Bucket Versioning Disabled or Suspended ───────────
+        if re.search(r"""status\s*=\s*["'](?:disabled|suspended)["']""", line_lower) or (
+            "versioning" in line_lower and "enabled = false" in line_lower
+        ):
+            if not _is_suppressed(raw, "TF016"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF016", Severity.HIGH.value,
+                    "AWS S3 bucket versioning is disabled or suspended (status = 'Disabled' / 'Suspended')",
+                    "Enable S3 bucket versioning (status = 'Enabled') to protect objects from ransomware and accidental deletion.",
+                    raw,
+                ))
+
+        # ─── TF017: AWS EBS Default Encryption Disabled ──────────────────────
+        if 'resource "aws_ebs_encryption_by_default"' in line_lower or 'aws_ebs_encryption_by_default' in line_lower:
+            in_ebs_default_encryption = True
+
+        if (in_ebs_default_encryption and re.search(r"""enabled\s*=\s*false\b""", line_lower)) or (
+            'aws_ebs_volume' in line_lower and re.search(r"""kms_key_id\s*=\s*(?:""|''|null\b)""", line_lower)
+        ):
+            if not _is_suppressed(raw, "TF017"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF017", Severity.HIGH.value,
+                    "AWS EBS volume encryption is disabled or missing customer KMS key",
+                    "Enable EBS volume encryption (enabled = true) and configure a customer-managed KMS key.",
+                    raw,
+                ))
+
+        # ─── TF018: AWS SQS/SNS Missing Server-Side KMS Encryption ───────────
+        if (
+            re.search(r"""kms_master_key_id\s*=\s*(?:""|''|null\b)""", line_lower)
+            or re.search(r"""sqs_managed_sse_enabled\s*=\s*false\b""", line_lower)
+        ):
+            if not _is_suppressed(raw, "TF018"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF018", Severity.MEDIUM.value,
+                    "AWS SQS queue or SNS topic missing server-side KMS encryption (kms_master_key_id is unconfigured or null)",
+                    "Configure kms_master_key_id with a customer-managed AWS KMS key or set sqs_managed_sse_enabled = true.",
                     raw,
                 ))
 

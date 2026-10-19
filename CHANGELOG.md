@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-10-19
+
+### Added
+- **Multi-Ecosystem SCA Phase 8 (GitHub Actions, Julia & Homebrew)**:
+  - Native manifest parsing for GitHub Actions CI/CD workflows:
+    - Parses `.github/workflows/*.yml` and `.github/workflows/*.yaml` to extract action dependencies (`uses: owner/repo@version`), mapped to the OSV ecosystem `"GitHub Actions"`.
+  - Native manifest parsing for Julia projects:
+    - `Project.toml`: extracts declared packages from `[deps]` and version bounds from `[compat]`.
+    - `Manifest.toml`: extracts locked packages and exact pinned `version = "..."` specifications.
+    - Concurrent asynchronous vulnerability querying against OSV.dev for `"Julia"`.
+  - Native manifest parsing for Homebrew:
+    - `Brewfile`: extracts packages declared via `brew "name"` or `brew "name", version: "..."`, mapped to OSV ecosystem `"Homebrew"`.
+- **Cloud-Native & Container Security Expansion**:
+  - **`TF015`** (HIGH): AWS Load Balancer listener configured with outdated SSL/TLS policy (`ELBSecurityPolicy-TLS-1-0`, `ELBSecurityPolicy-2015-05`, TLS 1.0/1.1).
+  - **`TF016`** (HIGH): AWS S3 bucket versioning is explicitly disabled or suspended (`status = "Disabled"` or `status = "Suspended"`).
+  - **`TF017`** (HIGH): AWS EBS default encryption disabled (`aws_ebs_encryption_by_default` `enabled = false`) or EBS volume missing customer KMS key.
+  - **`TF018`** (MEDIUM): AWS SQS queue or SNS topic missing server-side KMS encryption key (`kms_master_key_id = null` or `sqs_managed_sse_enabled = false`).
+  - **`DF013`** (HIGH): SSH daemon or port 22 exposed inside container image (`EXPOSE 22` or `openssh-server` installed/running) (CWE-250, CIS Docker Benchmark).
+  - **`DF014`** (HIGH): Insecure curl or wget piped directly to shell (`RUN curl ... | sh`, `RUN wget ... | bash`) without integrity validation (CWE-494).
+- **Advanced AST SAST Rules Phase 8 (`MP081`–`MP086`)**:
+  - **`MP081`** (HIGH): Insecure dynamic native library loading via `ctypes.CDLL()` / `ctypes.cdll.LoadLibrary()` with variable/dynamic path (DLL hijacking / uncontrolled search path - CWE-427).
+  - **`MP082`** (HIGH): Unbounded database modification: PyMongo `delete_many({})` or `update_many({})` executed with empty filter affecting all collection documents (CWE-284).
+  - **`MP083`** (HIGH): Permissive CORS policy: `allow_origins=["*"]` combined with `allow_credentials=True` exposes authenticated cookies/headers across untrusted origins (CWE-942).
+  - **`MP084`** (HIGH): Insecure SSH connection: `asyncssh.connect()` called with `known_hosts=None` disables server host key verification (MITM risk - CWE-295).
+  - **`MP085`** (HIGH): Insecure IPC manager: `multiprocessing.managers.BaseManager` / `SyncManager` initialized without an explicit, cryptographically secure `authkey` (CWE-306).
+  - **`MP086`** (HIGH): W^X memory protection violation: `mmap.mmap()` initialized with simultaneous write and execute permissions (`PROT_WRITE | PROT_EXEC`) (CWE-119, CWE-732).
+- **DevOps & Cloud Secrets Detection Phase 8 (`MP-SEC-051`–`MP-SEC-056`)**:
+  - High-fidelity token patterns for:
+    - Supabase Access Tokens (`sbp_`).
+    - Postman API Keys (`PMAK-`).
+    - Airtable Personal Access Tokens (`pat`).
+    - Render API Keys (`rnd_`).
+    - Segment Public API Tokens (`sgp_`).
+    - PagerDuty API Tokens (`y_`).
+- **Deterministic Mechanical Auto-Fixing Engine Phase 8 (`--fix` Expansion)**:
+  - `TF016`: Automatically enables S3 bucket versioning: `status = "Disabled"` / `status = "Suspended"` -> `status = "Enabled"`.
+  - `TF017`: Automatically enables EBS default encryption: `enabled = false` -> `enabled = true`.
+  - `DF013`: Automatically comments out prohibited container SSH port: `EXPOSE 22` -> `# EXPOSE 22 (SSH prohibited in container)`.
+  - `MP083`: Automatically disables credentials for wildcard CORS: `allow_credentials=True` -> `allow_credentials=False`.
+
 ## [0.18.0] - 2026-10-19
 
 ### Added

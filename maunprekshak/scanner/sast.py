@@ -91,6 +91,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP078  code.InteractiveInterpreter   HIGH
 # MP079  Insecure /tmp path format     HIGH
 # MP080  Celery pickle serialization   CRITICAL
+# MP081  ctypes dynamic library load   HIGH
+# MP082  Unbounded PyMongo deletion    HIGH
+# MP083  Permissive CORS credentials   HIGH
+# MP084  asyncssh known_hosts=None     HIGH
+# MP085  IPC manager missing authkey   HIGH
+# MP086  mmap PROT_WRITE | PROT_EXEC   HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -1237,6 +1243,110 @@ class SecurityVisitor(ast.NodeVisitor):
                         self._add(node, "MP080", Severity.CRITICAL.value,
                                   "Insecure Celery configuration: accept_content allows unsafe serializer ('pickle' or 'yaml') — enables remote code execution",
                                   "Restrict Celery accept_content to secure formats only: accept_content = ['json'].")
+
+        # MP081 — ctypes.CDLL or LoadLibrary with dynamic/variable path
+        if (
+            func_name in ("CDLL", "LoadLibrary", "WinDLL", "OleDLL")
+            or full_func.endswith(("ctypes.CDLL", "ctypes.cdll.LoadLibrary", "ctypes.windll.LoadLibrary"))
+            or (obj in ("ctypes", "cdll", "windll") and method in ("CDLL", "LoadLibrary", "WinDLL"))
+        ) and node.args:
+            first_arg = node.args[0]
+            is_dynamic_path = isinstance(first_arg, (ast.JoinedStr, ast.BinOp, ast.Call, ast.Name))
+            if is_dynamic_path:
+                self._add(node, "MP081", Severity.HIGH.value,
+                          "Insecure native library loading: ctypes.CDLL/LoadLibrary called with dynamic or variable path (DLL hijacking / uncontrolled search path)",
+                          "Specify an absolute, verified path with strict directory permissions when loading native libraries.")
+
+        # MP082 — PyMongo delete_many({}) or update_many({}) with empty query filter
+        if (
+            func_name in ("delete_many", "update_many")
+            or method in ("delete_many", "update_many")
+            or full_func.endswith((".delete_many", ".update_many"))
+        ) and node.args:
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.Dict) and len(first_arg.keys) == 0:
+                self._add(node, "MP082", Severity.HIGH.value,
+                          f"Unbounded database modification: collection.{func_name}({{}}) executed with empty filter affecting all documents",
+                          "Specify an explicit, bounded query filter or verify user authorization before performing bulk operations.")
+
+        # MP083 — CORSMiddleware with allow_origins=["*"] and allow_credentials=True
+        if func_name in ("add_middleware", "CORSMiddleware") or method == "add_middleware":
+            has_wildcard_origin = False
+            has_allow_creds = False
+            for kw in node.keywords:
+                if kw.arg == "allow_origins":
+                    if isinstance(kw.value, (ast.List, ast.Tuple, ast.Set)):
+                        for elt in kw.value.elts:
+                            if isinstance(elt, ast.Constant) and elt.value == "*":
+                                has_wildcard_origin = True
+                                break
+                    elif isinstance(kw.value, ast.Constant) and kw.value.value == "*":
+                        has_wildcard_origin = True
+                elif kw.arg == "allow_credentials":
+                    if isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                        has_allow_creds = True
+            if has_wildcard_origin and has_allow_creds:
+                self._add(node, "MP083", Severity.HIGH.value,
+                          "Permissive CORS policy: allow_origins=['*'] combined with allow_credentials=True exposes authenticated sessions across origins",
+                          "Specify explicit allowed origins when credentials (cookies/auth headers) are enabled, or set allow_credentials=False.")
+
+        # MP084 — asyncssh.connect(..., known_hosts=None) disables host key verification
+        if (func_name == "connect" or method == "connect") and ("asyncssh" in full_func or obj in ("asyncssh", "client")):
+            for kw in node.keywords:
+                if kw.arg == "known_hosts" and isinstance(kw.value, ast.Constant) and kw.value.value is None:
+                    self._add(node, "MP084", Severity.HIGH.value,
+                              "Insecure SSH connection: asyncssh.connect() called with known_hosts=None disables host key verification (MITM risk)",
+                              "Provide a known_hosts file path or explicitly configure trusted host keys to prevent man-in-the-middle attacks.")
+
+        # MP085 — multiprocessing BaseManager/SyncManager initialized without authkey or with empty authkey
+        if (
+            func_name in ("BaseManager", "SyncManager")
+            or full_func.endswith(("BaseManager", "SyncManager"))
+            or (obj in ("multiprocessing", "managers") and method in ("BaseManager", "SyncManager"))
+        ):
+            has_authkey = False
+            for kw in node.keywords:
+                if kw.arg == "authkey":
+                    if isinstance(kw.value, ast.Constant) and kw.value.value:
+                        has_authkey = True
+                    elif not isinstance(kw.value, ast.Constant):
+                        has_authkey = True
+            if not has_authkey:
+                self._add(node, "MP085", Severity.HIGH.value,
+                          f"Insecure IPC manager: {func_name} initialized without an explicit, cryptographically secure authkey",
+                          "Supply a non-empty, cryptographically secure authkey parameter (e.g. authkey=secrets.token_bytes(32)) to authenticate IPC connections.")
+
+        # MP086 — mmap allocation with simultaneous PROT_WRITE and PROT_EXEC (W^X violation)
+        if (func_name == "mmap" or method == "mmap" or full_func.endswith("mmap.mmap")):
+            prot_node = None
+            for kw in node.keywords:
+                if kw.arg == "prot":
+                    prot_node = kw.value
+            if not prot_node and len(node.args) >= 4:
+                prot_node = node.args[3]
+            if prot_node:
+                has_write = False
+                has_exec = False
+                nodes_to_inspect = [prot_node]
+                while nodes_to_inspect:
+                    curr = nodes_to_inspect.pop()
+                    if isinstance(curr, ast.BinOp) and isinstance(curr.op, ast.BitOr):
+                        nodes_to_inspect.append(curr.left)
+                        nodes_to_inspect.append(curr.right)
+                    elif isinstance(curr, ast.Attribute):
+                        if curr.attr in ("PROT_WRITE", "MAP_SHARED"):
+                            has_write = True
+                        if curr.attr == "PROT_EXEC":
+                            has_exec = True
+                    elif isinstance(curr, ast.Name):
+                        if curr.id == "PROT_WRITE":
+                            has_write = True
+                        if curr.id == "PROT_EXEC":
+                            has_exec = True
+                if has_write and has_exec:
+                    self._add(node, "MP086", Severity.HIGH.value,
+                              "W^X memory protection violation: mmap initialized with simultaneous write and execute permissions (PROT_WRITE | PROT_EXEC)",
+                              "Do not allocate memory that is simultaneously writable and executable. Use separate write and execute phases.")
 
     def visit_Dict(self, node: ast.Dict) -> None:
         # MP072 — NoSQL Injection (MongoDB $where clause)

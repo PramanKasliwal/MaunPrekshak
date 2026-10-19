@@ -62,6 +62,12 @@ PATTERNS = {
     "Scaleway API Key": r"\bSCW[A-Z0-9]{17,24}\b",
     "Doppler Personal / CLI Token": r"\bdp\.pt\.[a-zA-Z0-9]{40,44}\b",
     "OpenAI Organization Key": r"\borg-[a-zA-Z0-9]{24}\b",
+    "Supabase Access Token": r"\bsbp_[a-zA-Z0-9]{40}\b",
+    "Postman API Key": r"\bPMAK-[a-f0-9]{24}-[a-f0-9]{34}\b",
+    "Airtable Personal Access Token": r"\bpat[a-zA-Z0-9]{14}\.[a-zA-Z0-9]{64}\b",
+    "Render API Key": r"\brnd_[a-zA-Z0-9]{32}\b",
+    "Segment Public API Token": r"\bsgp_[a-zA-Z0-9]{64}\b",
+    "PagerDuty API Token": r"\by_[a-zA-Z0-9]{20}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

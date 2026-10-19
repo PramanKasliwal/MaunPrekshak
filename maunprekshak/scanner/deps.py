@@ -1251,6 +1251,138 @@ def parse_cran_description(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_github_actions_workflows(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a GitHub Actions workflow YAML file and extract third-party action dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            m = re.search(r"""(?:^|\s)(?:-\s+)?uses:\s*['"]?([a-zA-Z0-9_\-\.\/]+@[a-zA-Z0-9_\-\.\/]+)['"]?""", line_str)
+            if m:
+                ref = m.group(1).strip()
+                if ref.startswith(("./", "../", "docker://")):
+                    continue
+                action_name, version = ref.split("@", 1)
+                packages.append((action_name.strip(), version.strip()))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_julia_project(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Julia Project.toml and extract dependencies and version constraints.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        in_deps = False
+        in_compat = False
+        deps: dict[str, str] = {}
+        compat: dict[str, str] = {}
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            if line_str.startswith("["):
+                header = line_str.strip("[]").strip().lower()
+                in_deps = (header == "deps")
+                in_compat = (header == "compat")
+                continue
+
+            if in_deps:
+                m = re.match(r"^([A-Za-z0-9_]+)\s*=\s*[\"']?([^\"'\s]+)[\"']?", line_str)
+                if m:
+                    deps[m.group(1)] = ""
+            elif in_compat:
+                m = re.match(r"^([A-Za-z0-9_]+)\s*=\s*[\"']?([^\"'\s]+)[\"']?", line_str)
+                if m:
+                    compat[m.group(1)] = re.sub(r"^[~>=^<=\s]+", "", m.group(2)).strip()
+
+        for pkg in deps:
+            ver = compat.get(pkg, "")
+            packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_julia_manifest(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Julia Manifest.toml and extract pinned dependencies and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        current_pkg = ""
+        current_ver = ""
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            m_header = re.match(r"^\[{1,2}(?:deps\.)?([A-Za-z0-9_]+)\]{1,2}$", line_str)
+            if m_header:
+                if current_pkg and current_ver:
+                    packages.append((current_pkg, current_ver))
+                current_pkg = m_header.group(1)
+                current_ver = ""
+                continue
+
+            if current_pkg and line_str.startswith("version"):
+                m_ver = re.match(r'^version\s*=\s*["\']([^"\']+)["\']', line_str)
+                if m_ver:
+                    current_ver = m_ver.group(1)
+
+        if current_pkg and current_ver:
+            packages.append((current_pkg, current_ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_brewfile(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Homebrew Brewfile and extract brew packages and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            m = re.match(r"""^\s*brew\s+['"]([A-Za-z0-9_\.@\/\-]+)['"](?:\s*,\s*(?:.*version:\s*['"]([0-9\.]+)['"])?)?""", line_str)
+            if m:
+                pkg = m.group(1).strip()
+                ver = m.group(2) or ""
+                if not ver and "@" in pkg:
+                    parts = pkg.split("@", 1)
+                    ver = parts[1]
+                packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
     if cvss_score >= 9.0:
@@ -1367,6 +1499,9 @@ async def scan_dependencies(
     Looks for Haskell manifests: cabal.project.freeze, stack.yaml, *.cabal
     Looks for CocoaPods manifests: Podfile.lock, Podfile
     Looks for R CRAN manifests: DESCRIPTION
+    Looks for GitHub Actions workflows: .github/workflows/*.yml, .github/workflows/*.yaml
+    Looks for Julia manifests: Manifest.toml, Project.toml
+    Looks for Homebrew manifests: Brewfile
 
     Args:
         path: Absolute path to the project root directory.
@@ -1391,6 +1526,9 @@ async def scan_dependencies(
     hackage_packages: Dict[str, str] = {}
     cocoapods_packages: Dict[str, str] = {}
     cran_packages: Dict[str, str] = {}
+    gha_packages: Dict[str, str] = {}
+    julia_packages: Dict[str, str] = {}
+    homebrew_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1461,6 +1599,13 @@ async def scan_dependencies(
     ]
     cran_parsers = [
         ("DESCRIPTION", parse_cran_description),
+    ]
+    julia_parsers = [
+        ("Manifest.toml", parse_julia_manifest),
+        ("Project.toml", parse_julia_project),
+    ]
+    homebrew_parsers = [
+        ("Brewfile", parse_brewfile),
     ]
 
     for filename, parser in python_parsers:
@@ -1742,7 +1887,59 @@ async def scan_dependencies(
                 if pkg not in cran_packages or (ver and not cran_packages[pkg]):
                     cran_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages):
+    for filename, parser in julia_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in julia_packages or (ver and not julia_packages[pkg]):
+                    julia_packages[pkg] = ver
+
+    for filename, parser in homebrew_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in homebrew_packages or (ver and not homebrew_packages[pkg]):
+                    homebrew_packages[pkg] = ver
+
+    gha_files = []
+    if target_files is not None:
+        gha_files = [
+            f for f in target_files
+            if (".github/workflows" in f or ".github\\workflows" in f) and f.endswith((".yml", ".yaml"))
+        ]
+    else:
+        wf_dir = os.path.join(path, ".github", "workflows")
+        if os.path.isdir(wf_dir):
+            try:
+                for f in os.listdir(wf_dir):
+                    if f.endswith((".yml", ".yaml")):
+                        gha_files.append(os.path.join(wf_dir, f))
+            except Exception:
+                pass
+
+    for wf_file in gha_files:
+        if os.path.exists(wf_file):
+            for pkg, ver in parse_github_actions_workflows(wf_file):
+                if pkg not in gha_packages or (ver and not gha_packages[pkg]):
+                    gha_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -1763,6 +1960,9 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "Hackage") for pkg, ver in hackage_packages.items()]
         + [_query_osv(pkg, ver, "CocoaPods") for pkg, ver in cocoapods_packages.items()]
         + [_query_osv(pkg, ver, "CRAN") for pkg, ver in cran_packages.items()]
+        + [_query_osv(pkg, ver, "GitHub Actions") for pkg, ver in gha_packages.items()]
+        + [_query_osv(pkg, ver, "Julia") for pkg, ver in julia_packages.items()]
+        + [_query_osv(pkg, ver, "Homebrew") for pkg, ver in homebrew_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

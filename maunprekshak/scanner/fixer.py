@@ -34,6 +34,10 @@ Supports:
 - DF011: chmod 777 -> chmod 755
 - MP076: key_size=1024 -> key_size=2048
 - MP077: check_hostname=False -> check_hostname=True
+- TF016: status="Disabled"/"Suspended" -> "Enabled"
+- TF017: enabled/encrypted=false -> true
+- DF013: EXPOSE 22 -> comment out prohibited SSH port
+- MP083: allow_credentials=True -> allow_credentials=False (wildcard CORS)
 """
 import os
 import re
@@ -43,10 +47,10 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
-    "MP069", "MP073", "MP076", "MP077",
+    "MP069", "MP073", "MP076", "MP077", "MP083",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
-    "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011",
-    "DF002", "DF006", "DF011",
+    "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011", "TF016", "TF017",
+    "DF002", "DF006", "DF011", "DF013",
 }
 
 
@@ -270,6 +274,21 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
 
             elif finding.check_id == "MP077":
                 new_line = re.sub(r"\bcheck_hostname\s*=\s*False\b", "check_hostname = True", new_line)
+
+            elif finding.check_id == "TF016":
+                new_line = re.sub(r"""\bstatus\s*=\s*["'](?:Disabled|Suspended)["']""", 'status = "Enabled"', new_line, flags=re.IGNORECASE)
+                new_line = re.sub(r"\benabled\s*=\s*false\b", "enabled = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "TF017":
+                new_line = re.sub(r"\benabled\s*=\s*false\b", "enabled = true", new_line, flags=re.IGNORECASE)
+                new_line = re.sub(r"\bencrypted\s*=\s*false\b", "encrypted = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF013":
+                if re.search(r"^\s*EXPOSE\s+22\b", new_line, flags=re.IGNORECASE):
+                    new_line = re.sub(r"^\s*EXPOSE\s+22\b", "# EXPOSE 22 (SSH prohibited in container)", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "MP083":
+                new_line = re.sub(r"\ballow_credentials\s*=\s*True\b", "allow_credentials=False", new_line)
 
             if new_line != line:
                 lines[line_idx] = new_line

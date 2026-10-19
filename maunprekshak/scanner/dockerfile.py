@@ -287,6 +287,36 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                     code_snippet=raw_line.strip(),
                 ))
 
+        # DF013 — Exposing SSH port or running SSH daemon inside container
+        if (inst_upper.startswith("EXPOSE ") and re.search(r"\b22\b", inst_upper)) or (
+            inst_upper.startswith("RUN ") and re.search(r"\b(?:openssh-server|sshd|service\s+ssh\s+start)\b", full_inst, re.IGNORECASE)
+        ):
+            if not _is_suppressed(raw_line, "DF013"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF013",
+                    severity=Severity.HIGH.value,
+                    description="SSH daemon or port 22 exposed inside container image",
+                    recommendation="Do not run SSH daemons inside containers. Use orchestrator exec (e.g. docker exec, kubectl exec) for container access.",
+                    code_snippet=raw_line.strip(),
+                ))
+
+        # DF014 — Piping curl or wget directly to shell without validation
+        if inst_upper.startswith("RUN ") and re.search(r"\b(?:curl|wget)\b.*?\|\s*(?:sh|bash|zsh|dash|python[0-9.]*)\b", full_inst, re.IGNORECASE):
+            if not _is_suppressed(raw_line, "DF014"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF014",
+                    severity=Severity.HIGH.value,
+                    description="Insecure curl or wget piped directly to shell without integrity verification",
+                    recommendation="Download installer scripts to a file, verify checksums/signatures, and execute separately.",
+                    code_snippet=raw_line.strip(),
+                ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1
