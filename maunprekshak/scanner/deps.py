@@ -1138,6 +1138,119 @@ def parse_cabal_project_freeze(file_path: str) -> List[tuple[str, str]]:
 
 
 
+def parse_podfile(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a CocoaPods Podfile and extract pod dependencies and version requirements.
+    Supports: pod 'AFNetworking', '~> 4.0' or pod "SDWebImage", ">= 5.0" or pod 'SnapKit'.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.split("#")[0].strip()
+                if not raw:
+                    continue
+                match = re.match(
+                    r"""^\s*pod\s+['"]([A-Za-z0-9_\-\.\/]+)['"](?:\s*,\s*['"]([^'"]+)['"])?""",
+                    raw,
+                )
+                if match:
+                    pkg = match.group(1).split("/")[0].strip()
+                    ver_spec = match.group(2) or ""
+                    version = re.sub(r"^[~>=<!\s]+", "", ver_spec).strip()
+                    packages.append((pkg, version))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_podfile_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a CocoaPods Podfile.lock and extract pinned pod names and locked versions.
+    Extracts entries from the PODS section.
+    """
+    packages: List[tuple[str, str]] = []
+    in_pods = False
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.rstrip()
+                if not raw:
+                    continue
+                if re.match(r"^PODS:\s*$", raw):
+                    in_pods = True
+                    continue
+                elif in_pods and raw and not raw[0].isspace():
+                    in_pods = False
+                    continue
+
+                if in_pods:
+                    match = re.match(r"^\s*-\s+([A-Za-z0-9_\-\.\/]+)\s*\(([0-9][^)]*)\)", raw)
+                    if match:
+                        pkg = match.group(1).split("/")[0].strip()
+                        ver = re.sub(r"^[=~><!\s]+", "", match.group(2)).strip()
+                        packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_cran_description(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an R package DESCRIPTION file and extract CRAN dependencies from Imports and Depends.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        is_r_desc = any(line.startswith(("Package:", "Imports:", "Depends:")) for line in lines)
+        if not is_r_desc:
+            return []
+
+        dep_sections: List[str] = []
+        current_section: List[str] = []
+        in_dep_field = False
+
+        for line in lines:
+            line_str = line.rstrip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            if line_str and not line_str[0].isspace():
+                if in_dep_field and current_section:
+                    dep_sections.append(" ".join(current_section))
+                    current_section = []
+                lower_field = line_str.lower()
+                if lower_field.startswith("imports:") or lower_field.startswith("depends:"):
+                    in_dep_field = True
+                    content = line_str.split(":", 1)[1].strip()
+                    if content:
+                        current_section.append(content)
+                else:
+                    in_dep_field = False
+            elif in_dep_field:
+                current_section.append(line_str.strip())
+
+        if in_dep_field and current_section:
+            dep_sections.append(" ".join(current_section))
+
+        for sec in dep_sections:
+            tokens = [t.strip() for t in sec.split(",") if t.strip()]
+            for tok in tokens:
+                m = re.match(r"^([A-Za-z0-9_\.\-]+)(?:\s*\(([~>=<!\s]*[0-9][^)]*)\))?", tok)
+                if m:
+                    pkg = m.group(1).strip()
+                    if pkg.lower() == "r":
+                        continue
+                    ver_spec = m.group(2) or ""
+                    ver = re.sub(r"^[~>=<!\s]+", "", ver_spec).strip()
+                    packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
     if cvss_score >= 9.0:
@@ -1247,6 +1360,13 @@ async def scan_dependencies(
     Looks for PHP manifests: composer.lock, composer.json
     Looks for .NET NuGet manifests: packages.lock.json, packages.config, *.csproj, *.fsproj, *.vbproj
     Looks for Dart/Flutter Pub manifests: pubspec.lock, pubspec.yaml
+    Looks for Ruby manifests: Gemfile.lock, Gemfile
+    Looks for Elixir manifests: mix.lock, mix.exs
+    Looks for Swift manifests: Package.resolved, Package.swift
+    Looks for C/C++ manifests: conan.lock, conanfile.txt, vcpkg.json
+    Looks for Haskell manifests: cabal.project.freeze, stack.yaml, *.cabal
+    Looks for CocoaPods manifests: Podfile.lock, Podfile
+    Looks for R CRAN manifests: DESCRIPTION
 
     Args:
         path: Absolute path to the project root directory.
@@ -1269,6 +1389,8 @@ async def scan_dependencies(
     conan_packages: Dict[str, str] = {}
     vcpkg_packages: Dict[str, str] = {}
     hackage_packages: Dict[str, str] = {}
+    cocoapods_packages: Dict[str, str] = {}
+    cran_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1332,6 +1454,13 @@ async def scan_dependencies(
     hackage_parsers = [
         ("cabal.project.freeze", parse_cabal_project_freeze),
         ("stack.yaml", parse_stack_yaml),
+    ]
+    cocoapods_parsers = [
+        ("Podfile.lock", parse_podfile_lock),
+        ("Podfile", parse_podfile),
+    ]
+    cran_parsers = [
+        ("DESCRIPTION", parse_cran_description),
     ]
 
     for filename, parser in python_parsers:
@@ -1583,7 +1712,37 @@ async def scan_dependencies(
                 if pkg not in hackage_packages or (ver and not hackage_packages[pkg]):
                     hackage_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages):
+    for filename, parser in cocoapods_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in cocoapods_packages or (ver and not cocoapods_packages[pkg]):
+                    cocoapods_packages[pkg] = ver
+
+    for filename, parser in cran_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in cran_packages or (ver and not cran_packages[pkg]):
+                    cran_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -1602,6 +1761,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "Conan") for pkg, ver in conan_packages.items()]
         + [_query_osv(pkg, ver, "vcpkg") for pkg, ver in vcpkg_packages.items()]
         + [_query_osv(pkg, ver, "Hackage") for pkg, ver in hackage_packages.items()]
+        + [_query_osv(pkg, ver, "CocoaPods") for pkg, ver in cocoapods_packages.items()]
+        + [_query_osv(pkg, ver, "CRAN") for pkg, ver in cran_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

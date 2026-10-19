@@ -85,6 +85,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP072  MongoDB $where injection      HIGH
 # MP073  Flask debug on 0.0.0.0        MEDIUM
 # MP074  IPC Listener without authkey  HIGH
+# MP075  Unsafe reflection (getattr)   HIGH
+# MP076  Weak key generation (<2048)   HIGH
+# MP077  Disabled check_hostname       HIGH
+# MP078  code.InteractiveInterpreter   HIGH
+# MP079  Insecure /tmp path format     HIGH
+# MP080  Celery pickle serialization   CRITICAL
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -1156,6 +1162,82 @@ class SecurityVisitor(ast.NodeVisitor):
                           "Insecure IPC listener: multiprocessing.connection.Listener without authkey allows unauthorized connections and code execution via pickle",
                           "Provide a cryptographically secure authkey (e.g. authkey=secrets.token_bytes(32)) to authenticate client connections.")
 
+        # MP075 — Dangerous Unsafe Reflection via getattr() / setattr() with untrusted request input
+        if func_name in ("getattr", "setattr") and len(node.args) >= 2:
+            attr_arg = node.args[1]
+            is_untrusted_attr = self._is_request_source(attr_arg) or (
+                isinstance(attr_arg, ast.Name) and any(kw in attr_arg.id.lower() for kw in ("user", "attr", "param", "untrusted", "query", "field", "prop", "input"))
+            )
+            if is_untrusted_attr:
+                self._add(node, "MP075", Severity.HIGH.value,
+                          f"Unsafe reflection: {func_name}() called with untrusted user input attribute name",
+                          "Avoid arbitrary dynamic attribute access with user-supplied strings. Validate against a strict allowlist of permitted attributes.")
+
+        # MP076 — Cryptographic key generation using weak key size (< 2048 bits)
+        if (
+            (func_name in ("generate", "generate_private_key") or method in ("generate", "generate_private_key") or full_func.endswith((".generate", "generate_private_key")))
+            and any(k in full_func or k in obj for k in ("RSAKey", "DSSKey", "paramiko", "DSA", "dsa", "RSA", "rsa"))
+        ):
+            key_size = None
+            for kw in node.keywords:
+                if kw.arg in ("key_size", "bits"):
+                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int):
+                        key_size = kw.value.value
+                        break
+            if key_size is None and node.args:
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, int) and arg.value >= 128:
+                        key_size = arg.value
+                        break
+            if key_size is not None and key_size < 2048:
+                self._add(node, "MP076", Severity.HIGH.value,
+                          f"Weak cryptographic key size detected ({key_size} bits < 2048 bits) — vulnerable to factorization or discrete log attacks",
+                          "Use an asymmetric key length of at least 2048 bits (3072 or 4096 bits recommended).")
+
+        # MP078 — Dynamic code evaluation via standard library code module
+        if (
+            (obj in ("code", "code.InteractiveInterpreter", "InteractiveInterpreter", "code.InteractiveConsole", "InteractiveConsole") and method in ("runsource", "runcode", "push", "compile_command"))
+            or full_func in ("code.compile_command", "code.InteractiveInterpreter.runsource", "code.InteractiveConsole.push", "code.InteractiveConsole.runcode")
+            or (obj in ("interpreter", "console") and method in ("runsource", "runcode", "push"))
+            or (func_name == "compile_command")
+        ):
+            self._add(node, "MP078", Severity.HIGH.value,
+                      f"Dynamic code execution via standard library code.{method or func_name}() — permits arbitrary code execution",
+                      "Avoid using code.InteractiveInterpreter or compile_command for evaluating untrusted user input.")
+
+        # MP079 — Insecure /tmp path construction with os.path.join without atomic flags
+        if (
+            (obj in ("os.path", "path") and method == "join")
+            or full_func == "os.path.join"
+        ) and node.args:
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                if first_arg.value in ("/tmp", "/var/tmp"):
+                    self._add(node, "MP079", Severity.HIGH.value,
+                              "Insecure temporary file creation: os.path.join with '/tmp' without atomic creation flags",
+                              "Use tempfile.NamedTemporaryFile() or tempfile.mkstemp() instead of manually constructing paths in /tmp.")
+
+        # MP080 — Celery conf.update(task_serializer='pickle', accept_content=['pickle'])
+        if (func_name == "update" or method == "update") and ("conf" in full_func or obj in ("conf", "app.conf", "celery.conf")):
+            for kw in node.keywords:
+                if kw.arg in ("task_serializer", "result_serializer") and isinstance(kw.value, ast.Constant) and kw.value.value in ("pickle", "yaml"):
+                    self._add(node, "MP080", Severity.CRITICAL.value,
+                              f"Insecure Celery configuration: {kw.arg}='{kw.value.value}' allows remote code execution (RCE) via untrusted broker payloads",
+                              "Use secure serialization formats like 'json' for Celery tasks and results (task_serializer = 'json').")
+                elif kw.arg == "accept_content":
+                    has_pickle = False
+                    if isinstance(kw.value, (ast.List, ast.Set, ast.Tuple)):
+                        for elt in kw.value.elts:
+                            if isinstance(elt, ast.Constant) and elt.value in ("pickle", "yaml", "application/x-python-serialize"):
+                                has_pickle = True
+                                break
+                    elif isinstance(kw.value, ast.Constant) and kw.value.value in ("pickle", "yaml"):
+                        has_pickle = True
+                    if has_pickle:
+                        self._add(node, "MP080", Severity.CRITICAL.value,
+                                  "Insecure Celery configuration: accept_content allows unsafe serializer ('pickle' or 'yaml') — enables remote code execution",
+                                  "Restrict Celery accept_content to secure formats only: accept_content = ['json'].")
+
     def visit_Dict(self, node: ast.Dict) -> None:
         # MP072 — NoSQL Injection (MongoDB $where clause)
         for k, v in zip(node.keys, node.values):
@@ -1288,6 +1370,9 @@ class SecurityVisitor(ast.NodeVisitor):
                     self._add(node, "MP060", Severity.HIGH.value,
                               "TLS hostname verification explicitly disabled (check_hostname = False) — vulnerable to MitM attacks",
                               "Keep check_hostname = True to ensure certificates match the target hostname.")
+                    self._add(node, "MP077", Severity.HIGH.value,
+                              "Insecure TLS configuration: disabling hostname verification (check_hostname = False) allows Man-in-the-Middle (MitM) attacks",
+                              "Ensure hostname verification remains enabled: set check_hostname = True.")
                 elif target.attr == "verify_mode":
                     if (isinstance(node.value, ast.Attribute) and node.value.attr == "CERT_NONE") or (
                         isinstance(node.value, ast.Constant) and node.value.value == 0
@@ -1295,6 +1380,38 @@ class SecurityVisitor(ast.NodeVisitor):
                         self._add(node, "MP060", Severity.HIGH.value,
                                   "TLS certificate verification explicitly disabled (verify_mode = ssl.CERT_NONE) — vulnerable to MitM attacks",
                                   "Enforce certificate verification: set verify_mode = ssl.CERT_REQUIRED.")
+
+            # MP080 — Celery task / result serializer or accept_content assignment
+            is_celery_serializer = False
+            if isinstance(target, ast.Name) and target.id in ("task_serializer", "result_serializer"):
+                is_celery_serializer = True
+            elif isinstance(target, ast.Attribute) and target.attr in ("task_serializer", "result_serializer"):
+                is_celery_serializer = True
+
+            if is_celery_serializer and isinstance(node.value, ast.Constant) and node.value.value in ("pickle", "yaml", "application/x-python-serialize"):
+                self._add(node, "MP080", Severity.CRITICAL.value,
+                          f"Insecure Celery configuration: serializer set to '{node.value.value}' allows remote code execution (RCE) via untrusted broker payloads",
+                          "Use secure serialization formats like 'json' for Celery tasks and results (task_serializer = 'json').")
+
+            is_accept_content = False
+            if isinstance(target, ast.Name) and target.id == "accept_content":
+                is_accept_content = True
+            elif isinstance(target, ast.Attribute) and target.attr == "accept_content":
+                is_accept_content = True
+
+            if is_accept_content:
+                has_pickle = False
+                if isinstance(node.value, (ast.List, ast.Set, ast.Tuple)):
+                    for elt in node.value.elts:
+                        if isinstance(elt, ast.Constant) and elt.value in ("pickle", "yaml", "application/x-python-serialize"):
+                            has_pickle = True
+                            break
+                elif isinstance(node.value, ast.Constant) and node.value.value in ("pickle", "yaml"):
+                    has_pickle = True
+                if has_pickle:
+                    self._add(node, "MP080", Severity.CRITICAL.value,
+                              "Insecure Celery configuration: accept_content allows unsafe serializer ('pickle' or 'yaml') — enables remote code execution",
+                              "Restrict Celery accept_content to secure formats only: accept_content = ['json'].")
 
         self.generic_visit(node)
 
@@ -1356,6 +1473,15 @@ class SecurityVisitor(ast.NodeVisitor):
                     self._add(node, "MP048", Severity.MEDIUM.value,
                               "Host Header Injection: constructing URL using request host/headers in f-string",
                               "Do not trust request host headers when creating absolute URLs or password reset links. Use server-configured domain settings.")
+
+        # MP079 — Insecure /tmp path construction in f-string
+        if node.values:
+            first_val = node.values[0]
+            if isinstance(first_val, ast.Constant) and isinstance(first_val.value, str):
+                if first_val.value.startswith(("/tmp/", "/var/tmp/")):
+                    self._add(node, "MP079", Severity.HIGH.value,
+                              "Insecure temporary file creation: constructing paths in /tmp via f-string formatting creates TOCTOU symlink race conditions",
+                              "Use tempfile.NamedTemporaryFile() or tempfile.mkstemp() to securely generate temporary files.")
         self.generic_visit(node)
 
 

@@ -258,6 +258,35 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                     code_snippet=raw_line.strip(),
                 ))
 
+        # DF011 — Permissive file permissions in RUN instruction (chmod 777 / a+rwx)
+        if inst_upper.startswith("RUN "):
+            if re.search(r"\bchmod\b.*?\b(?:777|a\+rwx|a\+w)\b", full_inst, re.IGNORECASE):
+                if not _is_suppressed(raw_line, "DF011"):
+                    findings.append(SASTFinding(
+                        file_path=file_path,
+                        line=line_num,
+                        col=1,
+                        check_id="DF011",
+                        severity=Severity.HIGH.value,
+                        description="Permissive file permissions (chmod 777 or chmod a+rwx) assigned in container RUN instruction",
+                        recommendation="Follow the principle of least privilege. Grant only necessary permissions (e.g. chmod 755 or chmod 644).",
+                        code_snippet=raw_line.strip(),
+                    ))
+
+        # DF012 — Deprecated MAINTAINER instruction used
+        if inst_upper.startswith("MAINTAINER "):
+            if not _is_suppressed(raw_line, "DF012"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF012",
+                    severity=Severity.LOW.value,
+                    description="Deprecated MAINTAINER instruction used in Dockerfile",
+                    recommendation="The MAINTAINER instruction is deprecated. Use LABEL maintainer=\"name <email>\" instead.",
+                    code_snippet=raw_line.strip(),
+                ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1

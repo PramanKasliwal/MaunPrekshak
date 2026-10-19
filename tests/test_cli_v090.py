@@ -10,7 +10,7 @@ def test_cli_version():
     runner = CliRunner()
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.17.0" in result.stdout
+    assert "0.18.0" in result.stdout
 
 
 def test_cli_output_html(tmp_path):

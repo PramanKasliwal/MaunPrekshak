@@ -56,6 +56,12 @@ PATTERNS = {
     "PlanetScale Service Token": r"\b(?:pscale_tkn|pscale_pw)_[a-zA-Z0-9_\.]{32,}\b",
     "LaunchDarkly SDK Key": r"\b(?:sdk|mob|api)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
     "Grafana API Token": r"\bglsa_[A-Za-z0-9]{32}_[A-Za-z0-9]{8}\b",
+    "Bitbucket App Password / Token": r"\bbku_[a-zA-Z0-9]{32}\b",
+    "Pulumi Access Token": r"\bpul-[a-f0-9]{40}\b",
+    "New Relic Ingest / User API Key": r"\b(?:NRAK-[A-Z0-9]{27}|NRII-[A-Za-z0-9_\-]{32})\b",
+    "Scaleway API Key": r"\bSCW[A-Z0-9]{17,24}\b",
+    "Doppler Personal / CLI Token": r"\bdp\.pt\.[a-zA-Z0-9]{40,44}\b",
+    "OpenAI Organization Key": r"\borg-[a-zA-Z0-9]{24}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

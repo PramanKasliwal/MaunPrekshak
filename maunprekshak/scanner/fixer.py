@@ -30,6 +30,10 @@ Supports:
 - DF006: ADD -> COPY for local files
 - MP069: autoescape=False -> autoescape=True
 - MP073: host='0.0.0.0' -> host='127.0.0.1'
+- TF011: enable_logging / is_multi_region_trail = false -> true
+- DF011: chmod 777 -> chmod 755
+- MP076: key_size=1024 -> key_size=2048
+- MP077: check_hostname=False -> check_hostname=True
 """
 import os
 import re
@@ -39,9 +43,10 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
-    "MP069", "MP073",
+    "MP069", "MP073", "MP076", "MP077",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
-    "GHA004", "TF004", "TF005", "TF006", "TF009", "DF002", "DF006",
+    "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011",
+    "DF002", "DF006", "DF011",
 }
 
 
@@ -249,6 +254,22 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
 
             elif finding.check_id == "TF009":
                 new_line = re.sub(r"\bbucket_key_enabled\s*=\s*false\b", "bucket_key_enabled = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "TF011":
+                new_line = re.sub(r"\benable_logging\s*=\s*false\b", "enable_logging = true", new_line, flags=re.IGNORECASE)
+                new_line = re.sub(r"\bis_multi_region_trail\s*=\s*false\b", "is_multi_region_trail = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF011":
+                new_line = re.sub(r"\bchmod\s+(?:-R\s+)?777\b", lambda m: m.group(0).replace("777", "755"), new_line)
+                new_line = re.sub(r"\bchmod\s+a\+rwx\b", "chmod 755", new_line)
+
+            elif finding.check_id == "MP076":
+                new_line = re.sub(r"\bkey_size\s*=\s*1024\b", "key_size=2048", new_line)
+                new_line = re.sub(r"\bbits\s*=\s*1024\b", "bits=2048", new_line)
+                new_line = re.sub(r"\bgenerate\(\s*1024\s*\)", "generate(2048)", new_line)
+
+            elif finding.check_id == "MP077":
+                new_line = re.sub(r"\bcheck_hostname\s*=\s*False\b", "check_hostname = True", new_line)
 
             if new_line != line:
                 lines[line_idx] = new_line

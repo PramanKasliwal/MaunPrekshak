@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-10-19
+
+### Added
+- **Multi-Ecosystem SCA Phase 7 (CocoaPods & R CRAN)**:
+  - Native manifest parsing for Apple iOS/macOS CocoaPods:
+    - `Podfile`: extracts pod dependencies and semantic version constraints.
+    - `Podfile.lock`: parses locked pod graphs and resolved versions.
+  - Native manifest parsing for R CRAN:
+    - `DESCRIPTION`: extracts dependencies declared across `Imports:` and `Depends:` fields while filtering the local R runtime.
+  - Concurrent asynchronous vulnerability querying against OSV.dev for `"CocoaPods"` and `"CRAN"` ecosystems with CVSS scoring and remediation guidance.
+- **Cloud-Native & Container Security Expansion**:
+  - **`TF011`** (HIGH): AWS CloudTrail logging disabled or missing multi-region trail (`enable_logging = false` or `is_multi_region_trail = false`).
+  - **`TF012`** (HIGH): AWS RDS database storage missing customer-managed KMS encryption key (`kms_key_id` missing or unconfigured).
+  - **`TF013`** (MEDIUM): AWS VPC default security group contains active ingress or egress rules (`aws_default_security_group`).
+  - **`TF014`** (HIGH): AWS EKS cluster endpoint publicly accessible without CIDR IP restriction (`endpoint_public_access = true` or `0.0.0.0/0`).
+  - **`DF011`** (HIGH): Permissive file permissions (`chmod 777` or `chmod a+rwx`) in container `RUN` instruction (CWE-732).
+  - **`DF012`** (LOW): Deprecated `MAINTAINER` instruction used instead of OCI label standard `LABEL maintainer="..."` (CWE-477).
+- **Advanced AST SAST Rules Phase 7 (`MP075`–`MP080`)**:
+  - **`MP075`** (HIGH): Dangerous Unsafe Reflection: `getattr()` or `setattr()` called with user-controlled request input (CWE-470).
+  - **`MP076`** (HIGH): Cryptographic key generation using weak key size (`paramiko.RSAKey.generate(1024)`, `DSA.generate(1024)`, `key_size < 2048`) (CWE-326).
+  - **`MP077`** (HIGH): Insecure SSL/TLS context: disabling server hostname verification (`context.check_hostname = False`) (CWE-295).
+  - **`MP078`** (HIGH): Dynamic code evaluation via standard library `code.InteractiveInterpreter` or `code.compile_command` with untrusted input (CWE-95).
+  - **`MP079`** (HIGH): Insecure temporary file creation via string formatting in `/tmp` without atomic creation flags (TOCTOU race condition).
+  - **`MP080`** (CRITICAL): Celery configured with insecure serializer (`pickle` or `yaml`) allowing remote code execution via broker payloads (CWE-502).
+- **DevOps & Cloud Secrets Detection Phase 7 (`MP-SEC-045`–`MP-SEC-050`)**:
+  - High-fidelity token patterns for:
+    - Bitbucket App Passwords & Repository Access Tokens (`bku_`).
+    - Pulumi Access Tokens (`pul-`).
+    - New Relic Ingest & User API Keys (`NRAK-`, `NRII-`).
+    - Scaleway API Keys (`SCW`).
+    - Doppler Personal & CLI Tokens (`dp.pt.`).
+    - OpenAI Organization Keys (`org-`).
+- **Deterministic Mechanical Auto-Fixing Engine Phase 7 (`--fix` Expansion)**:
+  - `TF011`: Automatically sets `enable_logging = true` and `is_multi_region_trail = true`.
+  - `DF011`: Automatically replaces `chmod 777` / `chmod a+rwx` with `chmod 755`.
+  - `MP076`: Automatically upgrades weak key sizes (`key_size=1024` -> `2048`, `generate(1024)` -> `generate(2048)`).
+  - `MP077`: Automatically enables hostname verification: `check_hostname = False` -> `check_hostname = True`.
+
 ## [0.17.0] - 2026-10-11
 
 ### Added

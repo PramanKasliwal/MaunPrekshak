@@ -13,6 +13,10 @@ Rules:
   TF008 (HIGH)     - Cloud storage container with public access enabled
   TF009 (HIGH)     - S3 bucket server-side encryption disabled (bucket_key_enabled = false)
   TF010 (CRITICAL) - Security group ingress allows all traffic (-1/all) from unrestricted CIDR block
+  TF011 (HIGH)     - AWS CloudTrail logging or multi-region tracking disabled
+  TF012 (HIGH)     - AWS RDS database storage missing customer-managed KMS encryption key
+  TF013 (MEDIUM)   - AWS VPC default security group allows inbound or outbound traffic rules
+  TF014 (HIGH)     - AWS EKS cluster endpoint publicly accessible without CIDR restriction
 """
 
 import os
@@ -102,6 +106,12 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
     has_wildcard_action = False
     has_wildcard_resource = False
     iam_start_line = None
+
+    in_rds_resource = False
+    rds_start_line = None
+    rds_has_kms = False
+
+    in_default_sg = False
 
     for idx, raw in enumerate(lines):
         lineno = idx + 1
@@ -201,6 +211,61 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                     raw,
                 ))
 
+        # ─── TF011: AWS CloudTrail Logging / Multi-region Disabled ───────────
+        if re.search(r"""(?:enable_logging|is_multi_region_trail)\s*=\s*false\b""", line_lower):
+            if not _is_suppressed(raw, "TF011"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF011", Severity.HIGH.value,
+                    "AWS CloudTrail logging or multi-region trail protection is disabled (enable_logging = false or is_multi_region_trail = false)",
+                    "Enable CloudTrail logging (enable_logging = true) and multi-region trail (is_multi_region_trail = true) for continuous audit logging.",
+                    raw,
+                ))
+
+        # ─── TF012: RDS Missing KMS Encryption Key ───────────────────────────
+        if 'resource "aws_db_instance"' in line_lower or 'resource "aws_rds_cluster"' in line_lower:
+            in_rds_resource = True
+            rds_start_line = lineno
+            rds_has_kms = False
+
+        if in_rds_resource:
+            if re.search(r"""kms_key_id\s*=\s*["'][^"'\s]+["']""", line_lower) or re.search(r"""kms_key_id\s*=\s*aws_kms_key\.""", line_lower):
+                rds_has_kms = True
+
+        if re.search(r"""kms_key_id\s*=\s*(?:""|''|null\b)""", line_lower):
+            if not _is_suppressed(raw, "TF012"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF012", Severity.HIGH.value,
+                    "AWS database or storage KMS encryption key is unconfigured or null (kms_key_id = null)",
+                    "Configure a customer-managed AWS KMS key using kms_key_id = aws_kms_key.example.arn.",
+                    raw,
+                ))
+
+        # ─── TF013: AWS Default Security Group Rules ─────────────────────────
+        if 'resource "aws_default_security_group"' in line_lower:
+            in_default_sg = True
+
+        if in_default_sg:
+            if line_lower.startswith(("ingress", "egress")) or "ingress {" in line_lower or "egress {" in line_lower:
+                if not _is_suppressed(raw, "TF013"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "TF013", Severity.MEDIUM.value,
+                        "AWS VPC default security group contains active ingress or egress traffic rules",
+                        "Remove ingress and egress rules from aws_default_security_group to restrict all traffic by default.",
+                        raw,
+                    ))
+
+        # ─── TF014: AWS EKS Public Access Without CIDR Restriction ───────────
+        if re.search(r"""endpoint_public_access\s*=\s*true\b""", line_lower) or (
+            "public_access_cidrs" in line_lower and ('"0.0.0.0/0"' in line or "'0.0.0.0/0'" in line)
+        ):
+            if not _is_suppressed(raw, "TF014"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF014", Severity.HIGH.value,
+                    "AWS EKS cluster endpoint has unrestricted public access enabled (endpoint_public_access = true or 0.0.0.0/0)",
+                    "Disable public endpoint access (endpoint_public_access = false) or restrict public_access_cidrs to specific trusted IP ranges.",
+                    raw,
+                ))
+
         # ─── TF001 & TF010: Security Group Open Ingress Tracking ─────────────
         if "ingress" in line_lower or "aws_security_group" in line_lower:
             in_security_group_or_ingress = True
@@ -259,6 +324,19 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
         if line == "}" or line == "},":
             in_security_group_or_ingress = False
             sg_protocol = None
+            if in_rds_resource:
+                if not rds_has_kms and rds_start_line is not None:
+                    raw_start = lines[rds_start_line - 1]
+                    if not _is_suppressed(raw_start, "TF012"):
+                        findings.append(_make_finding(
+                            file_path, rds_start_line, "TF012", Severity.HIGH.value,
+                            "AWS RDS database resource missing customer-managed KMS encryption key (kms_key_id)",
+                            "Specify a customer-managed AWS KMS key using kms_key_id = aws_kms_key.example.arn.",
+                            raw_start.strip(),
+                        ))
+                in_rds_resource = False
+                rds_start_line = None
+            in_default_sg = False
 
         # ─── TF002: Overly Permissive IAM Policy Tracking ────────────────────
         if "aws_iam_policy" in line_lower or "policy" in line_lower:
