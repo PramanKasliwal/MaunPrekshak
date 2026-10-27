@@ -317,6 +317,34 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                     code_snippet=raw_line.strip(),
                 ))
 
+        # DF015 — Recursive permissions modification on sensitive system directories
+        if inst_upper.startswith("RUN ") and re.search(r"\b(?:chmod|chown)\s+(?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\s+.*?(?:^|[\s/])(?:etc|var|root|usr|bin|sbin)\b", full_inst, re.IGNORECASE):
+            if not _is_suppressed(raw_line, "DF015"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF015",
+                    severity=Severity.HIGH.value,
+                    description="Recursive permissions modification on sensitive system directory (/etc, /var, /root, /usr)",
+                    recommendation="Avoid recursive chmod/chown on sensitive system directories. Restrict permission changes to application-specific directories only.",
+                    code_snippet=raw_line.strip(),
+                ))
+
+        # DF016 — Python pip install without --no-cache-dir
+        if inst_upper.startswith("RUN ") and re.search(r"\bpip(?:3)?\s+install\b", full_inst, re.IGNORECASE):
+            if "--no-cache-dir" not in full_inst.lower() and not _is_suppressed(raw_line, "DF016"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF016",
+                    severity=Severity.MEDIUM.value,
+                    description="Python pip install executed without --no-cache-dir flag",
+                    recommendation="Add '--no-cache-dir' to pip install commands to minimize container image layer size and remove temporary wheel caches.",
+                    code_snippet=raw_line.strip(),
+                ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1

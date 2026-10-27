@@ -97,6 +97,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP084  asyncssh known_hosts=None     HIGH
 # MP085  IPC manager missing authkey   HIGH
 # MP086  mmap PROT_WRITE | PROT_EXEC   HIGH
+# MP087  re.DEBUG flag in regex        HIGH
+# MP088  asyncio create_subprocess_shell HIGH
+# MP089  cursor PRAGMA/f-string SQL    HIGH
+# MP090  Insecure TLS minimum_version  HIGH
+# MP091  Celery task global mutation   HIGH
+# MP092  zipfile extractall Zip Slip   HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -1348,6 +1354,70 @@ class SecurityVisitor(ast.NodeVisitor):
                               "W^X memory protection violation: mmap initialized with simultaneous write and execute permissions (PROT_WRITE | PROT_EXEC)",
                               "Do not allocate memory that is simultaneously writable and executable. Use separate write and execute phases.")
 
+        # MP087 — Insecure regex compilation with re.DEBUG flag enabled
+        if (
+            (func_name in ("compile", "search", "match", "sub", "findall", "finditer", "split") and (obj == "re" or full_func.startswith("re.")))
+            or (func_name == "compile" and obj == "re")
+        ):
+            has_debug_flag = False
+            for kw in node.keywords:
+                if kw.arg == "flags":
+                    for sub in ast.walk(kw.value):
+                        if (isinstance(sub, ast.Attribute) and sub.attr == "DEBUG") or (isinstance(sub, ast.Name) and sub.id == "DEBUG"):
+                            has_debug_flag = True
+                            break
+            if not has_debug_flag:
+                for arg in node.args[1:]:
+                    for sub in ast.walk(arg):
+                        if (isinstance(sub, ast.Attribute) and sub.attr == "DEBUG") or (isinstance(sub, ast.Name) and sub.id == "DEBUG"):
+                            has_debug_flag = True
+                            break
+            if has_debug_flag:
+                self._add(node, "MP087", Severity.HIGH.value,
+                          "Insecure regular expression compilation with re.DEBUG flag enabled leaks parser internals to stdout",
+                          "Remove re.DEBUG flag from production regex compilations to prevent information leakage to standard output.")
+
+        # MP088 — Dangerous asyncio.create_subprocess_shell with dynamic formatted string
+        if (func_name == "create_subprocess_shell" or method == "create_subprocess_shell" or full_func.endswith("create_subprocess_shell")):
+            if node.args:
+                cmd_arg = node.args[0]
+                is_dynamic = False
+                if isinstance(cmd_arg, ast.JoinedStr):
+                    is_dynamic = True
+                elif isinstance(cmd_arg, ast.BinOp) and isinstance(cmd_arg.op, (ast.Add, ast.Mod)):
+                    is_dynamic = True
+                elif isinstance(cmd_arg, ast.Call) and isinstance(cmd_arg.func, ast.Attribute) and cmd_arg.func.attr == "format":
+                    is_dynamic = True
+                elif isinstance(cmd_arg, ast.Name):
+                    is_dynamic = True
+
+                if is_dynamic:
+                    self._add(node, "MP088", Severity.HIGH.value,
+                              "Command injection risk: asyncio.create_subprocess_shell called with dynamic formatted command string",
+                              "Use asyncio.create_subprocess_exec with an explicit list of arguments instead of create_subprocess_shell.")
+
+        # MP089 — SQLite/PostgreSQL raw cursor PRAGMA or dynamic table identifier interpolation via f-string
+        if (method == "execute" or func_name == "execute") and node.args:
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.JoinedStr):
+                is_sql_fstring = False
+                for part in first_arg.values:
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                        val_upper = part.value.upper()
+                        if any(kw in val_upper for kw in ("PRAGMA", "SELECT", "DELETE", "UPDATE", "INSERT", "DROP", "ALTER", "CREATE")):
+                            is_sql_fstring = True
+                            break
+                if is_sql_fstring:
+                    self._add(node, "MP089", Severity.HIGH.value,
+                              "SQL/DDL injection risk: cursor.execute() called with dynamic f-string query or PRAGMA interpolation",
+                              "Use parameterized queries with placeholders (? or %s) or validate and whitelist identifier names with sql.Identifier.")
+
+        # MP092 — Insecure archive extraction: zipfile.extractall() without path validation
+        if (func_name == "extractall" or method == "extractall" or full_func.endswith(".extractall")):
+            self._add(node, "MP092", Severity.HIGH.value,
+                      "Insecure archive extraction: zipfile extractall() without member path sanitization is vulnerable to Zip Slip directory traversal",
+                      "Validate and sanitize archive member paths using os.path.commonpath() before extraction to prevent Zip Slip vulnerabilities.")
+
     def visit_Dict(self, node: ast.Dict) -> None:
         # MP072 — NoSQL Injection (MongoDB $where clause)
         for k, v in zip(node.keys, node.values):
@@ -1523,6 +1593,17 @@ class SecurityVisitor(ast.NodeVisitor):
                               "Insecure Celery configuration: accept_content allows unsafe serializer ('pickle' or 'yaml') — enables remote code execution",
                               "Restrict Celery accept_content to secure formats only: accept_content = ['json'].")
 
+            # MP090 — Insecure TLS minimum version: minimum_version assigned TLSv1 or TLSv1_1
+            if isinstance(target, ast.Attribute) and target.attr == "minimum_version":
+                val = node.value
+                is_insecure_tls = False
+                if isinstance(val, ast.Attribute) and val.attr in ("TLSv1", "TLSv1_1", "TLSv1_0"):
+                    is_insecure_tls = True
+                if is_insecure_tls:
+                    self._add(node, "MP090", Severity.HIGH.value,
+                              "Insecure TLS protocol version: minimum_version configured with deprecated TLSv1 or TLSv1_1",
+                              "Enforce modern TLS versions by setting context.minimum_version = ssl.TLSVersion.TLSv1_2 or TLSv1_3.")
+
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -1540,14 +1621,37 @@ class SecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        """MP044 — Missing/Disabled CSRF Protection."""
+        """MP044 — Missing/Disabled CSRF Protection, MP091 — Celery global mutation."""
         self._check_csrf_decorator(node)
+        self._check_celery_task_global(node)
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        """MP044 — Missing/Disabled CSRF Protection (async)."""
+        """MP044 — Missing/Disabled CSRF Protection (async), MP091 — Celery global mutation."""
         self._check_csrf_decorator(node)
+        self._check_celery_task_global(node)
         self.generic_visit(node)
+
+    def _check_celery_task_global(self, node) -> None:
+        is_bound_task = False
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Call):
+                dec_name = ""
+                if isinstance(dec.func, ast.Name):
+                    dec_name = dec.func.id
+                elif isinstance(dec.func, ast.Attribute):
+                    dec_name = dec.func.attr
+                if dec_name in ("task", "shared_task"):
+                    for kw in dec.keywords:
+                        if kw.arg == "bind" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                            is_bound_task = True
+                            break
+        if is_bound_task:
+            has_global = any(isinstance(child, ast.Global) for child in ast.walk(node))
+            if has_global:
+                self._add(node, "MP091", Severity.HIGH.value,
+                          "Unsafe Celery task: bound task (@app.task(bind=True)) mutates global state across worker processes",
+                          "Avoid mutating global variables within bound Celery tasks as worker concurrency models can cause race conditions and state corruption.")
 
     def _check_csrf_decorator(self, node) -> None:
         for dec in node.decorator_list:

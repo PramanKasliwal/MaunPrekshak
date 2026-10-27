@@ -1383,6 +1383,141 @@ def parse_brewfile(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_conda_environment(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Conda environment.yml / environment.yaml manifest into (package, version) tuples.
+    Extracts direct dependencies and nested pip dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        in_deps = False
+        in_pip = False
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            if re.match(r"^[A-Za-z0-9_-]+:", line) and not line.startswith(" ") and not line.startswith("\t"):
+                if line_str.startswith("dependencies:"):
+                    in_deps = True
+                    in_pip = False
+                    continue
+                else:
+                    in_deps = False
+                    in_pip = False
+                    continue
+
+            if in_deps:
+                if re.match(r"^\s*-\s*pip\s*:", line):
+                    in_pip = True
+                    continue
+
+                if in_pip:
+                    m = re.match(r"^\s*-\s*([A-Za-z0-9_\-\.]+)\s*(?:==|>=|<=|~=|!=|=)\s*([0-9][^\s,;#]*)", line)
+                    if m:
+                        packages.append((m.group(1).lower(), m.group(2)))
+                        continue
+                    m_bare = re.match(r"^\s*-\s*([A-Za-z0-9_\-\.]+)", line)
+                    if m_bare:
+                        packages.append((m_bare.group(1).lower(), ""))
+                        continue
+
+                m = re.match(r"^\s*-\s*([A-Za-z0-9_\-\.]+)\s*(?:==|>=|<=|~=|!=|=)\s*([0-9][^\s,;#]*)", line)
+                if m:
+                    packages.append((m.group(1).lower(), m.group(2)))
+                else:
+                    m_bare = re.match(r"^\s*-\s*([A-Za-z0-9_\-\.]+)\s*$", line)
+                    if m_bare and m_bare.group(1).lower() != "pip":
+                        packages.append((m_bare.group(1).lower(), ""))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_helm_chart(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Helm Chart.yaml or Chart.lock manifest and extract chart dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        in_deps = False
+        current_dep: dict[str, str] = {}
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+
+            if re.match(r"^[A-Za-z0-9_-]+:", line) and not line.startswith(" ") and not line.startswith("\t"):
+                if line_str.startswith("dependencies:"):
+                    in_deps = True
+                    continue
+                else:
+                    if in_deps and "name" in current_dep:
+                        packages.append((current_dep["name"], current_dep.get("version", "")))
+                        current_dep = {}
+                    in_deps = False
+                    continue
+
+            if in_deps:
+                if re.match(r"^\s*-\s*", line):
+                    if "name" in current_dep:
+                        packages.append((current_dep["name"], current_dep.get("version", "")))
+                        current_dep = {}
+
+                m_name = re.search(r"(?:-\s+)?name:\s*['\"]?([^'\"\s]+)['\"]?", line_str)
+                if m_name and "name" not in current_dep:
+                    current_dep["name"] = m_name.group(1).strip()
+                m_ver = re.search(r"version:\s*['\"]?([^'\"\s]+)['\"]?", line_str)
+                if m_ver:
+                    current_dep["version"] = m_ver.group(1).strip()
+
+        if in_deps and "name" in current_dep:
+            packages.append((current_dep["name"], current_dep.get("version", "")))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_opam_file(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an OCaml *.opam or opam manifest and extract package dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        m_block = re.search(r"depends\s*[:=]\s*\[(.*?)\]", content, re.DOTALL)
+        if not m_block:
+            return packages
+
+        block_content = m_block.group(1)
+        block_content = re.sub(r"#.*", "", block_content)
+        block_content = re.sub(r"\(\*.*?\*\)", "", block_content, flags=re.DOTALL)
+
+        pattern = r"['\"]([a-zA-Z0-9_\-\.\+]+)['\"](?:\s*\{([^}]*)\})?"
+        for match in re.finditer(pattern, block_content):
+            pkg_name = match.group(1).strip()
+            constraint = match.group(2)
+            version = ""
+            if constraint:
+                m_ver = re.search(r"(?:>=|<=|==|=|~=|>|<)?\s*['\"]?([0-9][a-zA-Z0-9_\-\.\+]*)['\"]?", constraint)
+                if m_ver:
+                    version = m_ver.group(1).strip()
+            packages.append((pkg_name, version))
+    except Exception:
+        pass
+    return packages
+
+
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
     if cvss_score >= 9.0:
@@ -1502,6 +1637,9 @@ async def scan_dependencies(
     Looks for GitHub Actions workflows: .github/workflows/*.yml, .github/workflows/*.yaml
     Looks for Julia manifests: Manifest.toml, Project.toml
     Looks for Homebrew manifests: Brewfile
+    Looks for Conda manifests: environment.yml, environment.yaml
+    Looks for Helm manifests: Chart.yaml, Chart.lock
+    Looks for OCaml manifests: *.opam, opam
 
     Args:
         path: Absolute path to the project root directory.
@@ -1529,6 +1667,9 @@ async def scan_dependencies(
     gha_packages: Dict[str, str] = {}
     julia_packages: Dict[str, str] = {}
     homebrew_packages: Dict[str, str] = {}
+    conda_packages: Dict[str, str] = {}
+    helm_packages: Dict[str, str] = {}
+    opam_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1606,6 +1747,14 @@ async def scan_dependencies(
     ]
     homebrew_parsers = [
         ("Brewfile", parse_brewfile),
+    ]
+    conda_parsers = [
+        ("environment.yml", parse_conda_environment),
+        ("environment.yaml", parse_conda_environment),
+    ]
+    helm_parsers = [
+        ("Chart.yaml", parse_helm_chart),
+        ("Chart.lock", parse_helm_chart),
     ]
 
     for filename, parser in python_parsers:
@@ -1917,6 +2066,55 @@ async def scan_dependencies(
                 if pkg not in homebrew_packages or (ver and not homebrew_packages[pkg]):
                     homebrew_packages[pkg] = ver
 
+    for filename, parser in conda_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in conda_packages or (ver and not conda_packages[pkg]):
+                    conda_packages[pkg] = ver
+
+    for filename, parser in helm_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in helm_packages or (ver and not helm_packages[pkg]):
+                    helm_packages[pkg] = ver
+
+    opam_files = []
+    if target_files is not None:
+        opam_files = [f for f in target_files if f.endswith(".opam") or os.path.basename(f) == "opam"]
+    else:
+        try:
+            for root_dir, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "dist", "_build", "_opam", "venv", ".venv")]
+                for file in files:
+                    if file.endswith(".opam") or file == "opam":
+                        opam_files.append(os.path.join(root_dir, file))
+        except Exception:
+            pass
+
+    for opam_file in opam_files:
+        if os.path.exists(opam_file):
+            for pkg, ver in parse_opam_file(opam_file):
+                if pkg not in opam_packages or (ver and not opam_packages[pkg]):
+                    opam_packages[pkg] = ver
+
     gha_files = []
     if target_files is not None:
         gha_files = [
@@ -1939,7 +2137,7 @@ async def scan_dependencies(
                 if pkg not in gha_packages or (ver and not gha_packages[pkg]):
                     gha_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages):
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages or conda_packages or helm_packages or opam_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -1963,6 +2161,9 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "GitHub Actions") for pkg, ver in gha_packages.items()]
         + [_query_osv(pkg, ver, "Julia") for pkg, ver in julia_packages.items()]
         + [_query_osv(pkg, ver, "Homebrew") for pkg, ver in homebrew_packages.items()]
+        + [_query_osv(pkg, ver, "PyPI") for pkg, ver in conda_packages.items()]
+        + [_query_osv(pkg, ver, "Bitnami") for pkg, ver in helm_packages.items()]
+        + [_query_osv(pkg, ver, "opam") for pkg, ver in opam_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

@@ -21,6 +21,10 @@ Rules:
   TF016 (HIGH)     - AWS S3 bucket versioning is disabled or suspended
   TF017 (HIGH)     - AWS EBS default encryption disabled or volume missing customer KMS key
   TF018 (MEDIUM)   - AWS SQS queue or SNS topic missing server-side KMS encryption
+  TF019 (HIGH)     - AWS CloudFront distribution allows insecure HTTP access (viewer_protocol_policy = "allow-all")
+  TF020 (HIGH)     - AWS OpenSearch cluster has encryption at rest or node-to-node encryption disabled
+  TF021 (HIGH)     - AWS API Gateway endpoint missing authorizer (authorization = "NONE")
+  TF022 (MEDIUM)   - AWS Lambda function missing customer KMS encryption key (kms_key_arn is null or empty)
 """
 
 import os
@@ -117,6 +121,7 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
 
     in_default_sg = False
     in_ebs_default_encryption = False
+    in_opensearch_encrypt = False
 
     for idx, raw in enumerate(lines):
         lineno = idx + 1
@@ -321,6 +326,51 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                     raw,
                 ))
 
+        # ─── TF019: Insecure CloudFront Viewer Protocol Policy ───────────────
+        if re.search(r"""viewer_protocol_policy\s*=\s*['"]allow-all['"]""", line_lower):
+            if not _is_suppressed(raw, "TF019"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF019", Severity.HIGH.value,
+                    "AWS CloudFront distribution allows insecure unencrypted HTTP access (viewer_protocol_policy = 'allow-all')",
+                    "Change viewer_protocol_policy to 'redirect-to-https' or 'https-only'.",
+                    raw,
+                ))
+
+        # ─── TF020: AWS OpenSearch Encryption at Rest or Node-to-Node Disabled
+        if "encrypt_at_rest" in line_lower or "node_to_node_encryption" in line_lower:
+            in_opensearch_encrypt = True
+
+        if in_opensearch_encrypt and re.search(r"""enabled\s*=\s*false\b""", line_lower):
+            if not _is_suppressed(raw, "TF020"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF020", Severity.HIGH.value,
+                    "AWS OpenSearch/Elasticsearch cluster has encryption at rest or node-to-node encryption disabled (enabled = false)",
+                    "Set enabled = true under encrypt_at_rest and node_to_node_encryption blocks.",
+                    raw,
+                ))
+
+        # ─── TF021: AWS API Gateway Endpoint Missing Authorization ───────────
+        if re.search(r"""authorization\s*=\s*['"]none['"]""", line_lower) or (
+            "aws_api_gateway_method" in line_lower and re.search(r"""authorization\s*=\s*null\b""", line_lower)
+        ):
+            if not _is_suppressed(raw, "TF021"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF021", Severity.HIGH.value,
+                    "AWS API Gateway method has authorization disabled (authorization = 'NONE')",
+                    "Configure authorization = 'AWS_IAM', 'CUSTOM', or 'COGNITO_USER_POOLS' with an authorizer_id.",
+                    raw,
+                ))
+
+        # ─── TF022: AWS Lambda Missing Customer KMS Key ──────────────────────
+        if re.search(r"""kms_key_arn\s*=\s*(?:""|''|null\b)""", line_lower):
+            if not _is_suppressed(raw, "TF022"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF022", Severity.MEDIUM.value,
+                    "AWS Lambda function environment variables missing customer-managed KMS encryption key (kms_key_arn is null or empty)",
+                    "Configure kms_key_arn with a customer-managed AWS KMS key ARN to encrypt environment variables.",
+                    raw,
+                ))
+
         # ─── TF001 & TF010: Security Group Open Ingress Tracking ─────────────
         if "ingress" in line_lower or "aws_security_group" in line_lower:
             in_security_group_or_ingress = True
@@ -392,6 +442,7 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                 in_rds_resource = False
                 rds_start_line = None
             in_default_sg = False
+            in_opensearch_encrypt = False
 
         # ─── TF002: Overly Permissive IAM Policy Tracking ────────────────────
         if "aws_iam_policy" in line_lower or "policy" in line_lower:

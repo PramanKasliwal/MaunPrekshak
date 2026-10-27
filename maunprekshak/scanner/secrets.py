@@ -68,6 +68,12 @@ PATTERNS = {
     "Render API Key": r"\brnd_[a-zA-Z0-9]{32}\b",
     "Segment Public API Token": r"\bsgp_[a-zA-Z0-9]{64}\b",
     "PagerDuty API Token": r"\by_[a-zA-Z0-9]{20}\b",
+    "Twilio API Key": r"\bSK[0-9a-fA-F]{32}\b",
+    "Datadog API Key": r"(?i)(?:datadog.*api_key|DD_API_KEY)\s*[:=]\s*['\"][0-9a-fA-F]{32}['\"]",
+    "Asana Personal Access Token": r"\b[0-9]{16}:[0-9a-zA-Z]{32}\b",
+    "Fastly API Token": r"(?i)(?:fastly.*api_token|FASTLY_API_TOKEN)\s*[:=]\s*['\"][a-zA-Z0-9_\-]{32}['\"]",
+    "Linear Personal Access Token": r"\blin_pat_[a-zA-Z0-9]{40}\b",
+    "HubSpot Private App Token": r"\bpat-na1-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

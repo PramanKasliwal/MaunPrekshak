@@ -38,6 +38,10 @@ Supports:
 - TF017: enabled/encrypted=false -> true
 - DF013: EXPOSE 22 -> comment out prohibited SSH port
 - MP083: allow_credentials=True -> allow_credentials=False (wildcard CORS)
+- TF019: viewer_protocol_policy = "allow-all" -> "redirect-to-https"
+- TF020: enabled = false -> enabled = true (OpenSearch encryption)
+- DF016: pip install -> pip install --no-cache-dir
+- MP090: ssl.TLSVersion.TLSv1 / TLSv1_1 -> ssl.TLSVersion.TLSv1_2
 """
 import os
 import re
@@ -47,10 +51,11 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
-    "MP069", "MP073", "MP076", "MP077", "MP083",
+    "MP069", "MP073", "MP076", "MP077", "MP083", "MP090",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
     "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011", "TF016", "TF017",
-    "DF002", "DF006", "DF011", "DF013",
+    "TF019", "TF020",
+    "DF002", "DF006", "DF011", "DF013", "DF016",
 }
 
 
@@ -289,6 +294,19 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
 
             elif finding.check_id == "MP083":
                 new_line = re.sub(r"\ballow_credentials\s*=\s*True\b", "allow_credentials=False", new_line)
+
+            elif finding.check_id == "TF019":
+                new_line = re.sub(r"""\bviewer_protocol_policy\s*=\s*['"]allow-all['"]""", 'viewer_protocol_policy = "redirect-to-https"', new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "TF020":
+                new_line = re.sub(r"\benabled\s*=\s*false\b", "enabled = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF016":
+                if re.search(r"\bpip(?:3)?\s+install\b", new_line, flags=re.IGNORECASE) and "--no-cache-dir" not in new_line.lower():
+                    new_line = re.sub(r"(\bpip(?:3)?\s+install\b)", r"\1 --no-cache-dir", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "MP090":
+                new_line = re.sub(r"\bTLSVersion\.TLSv1(?:_1|_0)?\b", "TLSVersion.TLSv1_2", new_line)
 
             if new_line != line:
                 lines[line_idx] = new_line

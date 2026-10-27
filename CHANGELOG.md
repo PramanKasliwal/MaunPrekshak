@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-10-27
+
+### Added
+- **Multi-Ecosystem SCA Phase 9 (Conda, Helm & OCaml opam)**:
+  - Native manifest parsing for Conda Python environments:
+    - `environment.yml` and `environment.yaml`: extracts direct package specifications and nested `pip:` dependencies, mapped to OSV ecosystem `"PyPI"`.
+  - Native manifest parsing for Kubernetes Helm charts:
+    - `Chart.yaml` and `Chart.lock`: extracts chart dependencies from `dependencies:` blocks, mapped to OSV ecosystem `"Bitnami"`.
+  - Native manifest parsing for OCaml projects:
+    - `*.opam` and `opam`: extracts dependencies and version constraints from `depends: [ ... ]`, mapped to OSV ecosystem `"opam"`.
+- **Cloud-Native & Container Security Expansion**:
+  - **`TF019`** (HIGH): AWS CloudFront distribution missing SSL/TLS protocol enforcement (`viewer_protocol_policy = "allow-all"` allows unencrypted HTTP access).
+  - **`TF020`** (HIGH): AWS OpenSearch / Elasticsearch service cluster encryption at rest or node-to-node encryption disabled (`enabled = false`).
+  - **`TF021`** (HIGH): AWS API Gateway REST/HTTP API endpoint without authorization configured (`authorization = "NONE"` or `null`).
+  - **`TF022`** (MEDIUM): AWS Lambda function environment variables missing customer-managed KMS encryption key (`kms_key_arn = null` or empty).
+  - **`DF015`** (HIGH): Recursive permissions modification on sensitive system directories (`RUN chmod -R ... /etc`, `/var`, `/root`, `/usr`) (CWE-732).
+  - **`DF016`** (MEDIUM): Python `pip install` executed without `--no-cache-dir` in container `RUN` instructions (CWE-400).
+- **Advanced AST SAST Rules Phase 9 (`MP087`–`MP092`)**:
+  - **`MP087`** (HIGH): Insecure regex compilation with `re.DEBUG` flag enabled in production code, causing regex AST parse trees to leak into standard output (CWE-200).
+  - **`MP088`** (HIGH): Dangerous `asyncio.create_subprocess_shell()` with dynamic formatted string or unquoted variable input (Command Injection - CWE-78).
+  - **`MP089`** (HIGH): SQLite/PostgreSQL raw cursor PRAGMA or dynamic table identifier interpolation via f-string without parameterization (SQL/DDL Injection - CWE-89).
+  - **`MP090`** (HIGH): Insecure TLS minimum version: `minimum_version = ssl.TLSVersion.TLSv1` or `TLSv1_1` (CWE-326).
+  - **`MP091`** (HIGH): Unsafe Celery task: bound task (`@app.task(bind=True)`) mutates global state across worker processes (CWE-20).
+  - **`MP092`** (HIGH): Insecure archive extraction: `zipfile.ZipFile.extractall()` without member path sanitization (Zip Slip directory traversal - CWE-22, CWE-29).
+- **DevOps & Cloud Secrets Detection Phase 9 (`MP-SEC-057`–`MP-SEC-062`)**:
+  - High-fidelity token patterns for:
+    - Twilio API Keys (`SK[0-9a-fA-F]{32}`).
+    - Datadog API Keys (`datadog_api_key` / `DD_API_KEY`).
+    - Asana Personal Access Tokens (`16-digit:32-char`).
+    - Fastly API Tokens (`fastly_api_token` / `FASTLY_API_TOKEN`).
+    - Linear Personal Access Tokens (`lin_pat_`).
+    - HubSpot Private App Tokens (`pat-na1-UUID`).
+- **Deterministic Mechanical Auto-Fixing Engine Phase 9 (`--fix` Expansion)**:
+  - `TF019`: Automatically enforces CloudFront HTTPS redirection: `viewer_protocol_policy = "allow-all"` -> `viewer_protocol_policy = "redirect-to-https"`.
+  - `TF020`: Automatically enables OpenSearch encryption at rest and node-to-node: `enabled = false` -> `enabled = true`.
+  - `DF016`: Automatically appends `--no-cache-dir` to container `pip install` instructions.
+  - `MP090`: Automatically upgrades deprecated TLS minimum version: `ssl.TLSVersion.TLSv1` / `TLSv1_1` -> `ssl.TLSVersion.TLSv1_2`.
+
 ## [0.19.0] - 2026-10-19
 
 ### Added
