@@ -1518,6 +1518,89 @@ def parse_opam_file(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_renv_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an R renv.lock file (JSON format) and extract pinned packages and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            pkgs = data.get("Packages", {})
+            if isinstance(pkgs, dict):
+                for name, info in pkgs.items():
+                    if isinstance(info, dict):
+                        ver = str(info.get("Version", "")).strip()
+                        packages.append((name, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_rebar_lock(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an Erlang rebar.lock manifest and extract Hex packages and versions.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        pattern = re.compile(r"""(?:pkg\s*,\s*)?<<["']([a-zA-Z0-9_\-]+)["']>>\s*,\s*<<["']([0-9][a-zA-Z0-9_\-\.\+]*)["']>>""")
+        seen = set()
+        for m in pattern.finditer(content):
+            pkg = m.group(1).strip()
+            ver = m.group(2).strip()
+            if pkg not in seen:
+                seen.add(pkg)
+                packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_gradle_version_catalog(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Gradle Version Catalog TOML manifest (libs.versions.toml) and extract Maven dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+        versions_map = data.get("versions", {})
+        libraries = data.get("libraries", {})
+        for lib_key, lib_val in libraries.items():
+            group = ""
+            name = ""
+            ver = ""
+            if isinstance(lib_val, str):
+                parts = lib_val.split(":")
+                if len(parts) >= 2:
+                    group = parts[0]
+                    name = parts[1]
+                    ver = parts[2] if len(parts) >= 3 else ""
+            elif isinstance(lib_val, dict):
+                if "module" in lib_val:
+                    m_parts = lib_val["module"].split(":")
+                    if len(m_parts) >= 2:
+                        group = m_parts[0]
+                        name = m_parts[1]
+                else:
+                    group = lib_val.get("group", "")
+                    name = lib_val.get("name", "")
+                ver_entry = lib_val.get("version")
+                if isinstance(ver_entry, str):
+                    ver = ver_entry
+                elif isinstance(ver_entry, dict) and "ref" in ver_entry:
+                    ver = str(versions_map.get(ver_entry["ref"], ""))
+            if group and name:
+                full_pkg = f"{group}:{name}"
+                packages.append((full_pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
     if cvss_score >= 9.0:
@@ -1623,17 +1706,17 @@ async def scan_dependencies(
     Looks for JavaScript/npm manifests: package-lock.json, yarn.lock, pnpm-lock.yaml, package.json
     Looks for Go manifests: go.sum, go.mod
     Looks for Rust manifests: Cargo.lock, Cargo.toml
-    Looks for Java manifests: pom.xml, build.gradle, build.gradle.kts, gradle.lockfile
+    Looks for Java manifests: pom.xml, build.gradle, build.gradle.kts, gradle.lockfile, libs.versions.toml
     Looks for PHP manifests: composer.lock, composer.json
     Looks for .NET NuGet manifests: packages.lock.json, packages.config, *.csproj, *.fsproj, *.vbproj
     Looks for Dart/Flutter Pub manifests: pubspec.lock, pubspec.yaml
     Looks for Ruby manifests: Gemfile.lock, Gemfile
-    Looks for Elixir manifests: mix.lock, mix.exs
+    Looks for Elixir/Erlang manifests: mix.lock, mix.exs, rebar.lock
     Looks for Swift manifests: Package.resolved, Package.swift
     Looks for C/C++ manifests: conan.lock, conanfile.txt, vcpkg.json
     Looks for Haskell manifests: cabal.project.freeze, stack.yaml, *.cabal
     Looks for CocoaPods manifests: Podfile.lock, Podfile
-    Looks for R CRAN manifests: DESCRIPTION
+    Looks for R CRAN manifests: DESCRIPTION, renv.lock
     Looks for GitHub Actions workflows: .github/workflows/*.yml, .github/workflows/*.yaml
     Looks for Julia manifests: Manifest.toml, Project.toml
     Looks for Homebrew manifests: Brewfile
@@ -1698,6 +1781,8 @@ async def scan_dependencies(
         ("build.gradle", parse_gradle_file),
         ("build.gradle.kts", parse_gradle_file),
         ("gradle.lockfile", parse_gradle_lockfile),
+        ("libs.versions.toml", parse_gradle_version_catalog),
+        ("gradle/libs.versions.toml", parse_gradle_version_catalog),
     ]
     packagist_parsers = [
         ("composer.lock", parse_composer_lock),
@@ -1718,6 +1803,7 @@ async def scan_dependencies(
     hex_parsers = [
         ("mix.lock", parse_mix_lock),
         ("mix.exs", parse_mix_exs),
+        ("rebar.lock", parse_rebar_lock),
     ]
     swift_parsers = [
         ("Package.resolved", parse_package_resolved),
@@ -1740,6 +1826,7 @@ async def scan_dependencies(
     ]
     cran_parsers = [
         ("DESCRIPTION", parse_cran_description),
+        ("renv.lock", parse_renv_lock),
     ]
     julia_parsers = [
         ("Manifest.toml", parse_julia_manifest),

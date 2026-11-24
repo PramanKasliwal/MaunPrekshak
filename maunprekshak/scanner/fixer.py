@@ -42,6 +42,10 @@ Supports:
 - TF020: enabled = false -> enabled = true (OpenSearch encryption)
 - DF016: pip install -> pip install --no-cache-dir
 - MP090: ssl.TLSVersion.TLSv1 / TLSv1_1 -> ssl.TLSVersion.TLSv1_2
+- TF024: client_broker = "PLAINTEXT" / "TLS_PLAINTEXT" -> "TLS"
+- TF025: at_rest_encryption_enabled / transit_encryption_enabled = false -> true
+- DF018: strip --insecure, -k, and --no-check-certificate from RUN curl/wget
+- MP098: AutoAddPolicy -> RejectPolicy
 """
 import os
 import re
@@ -51,11 +55,11 @@ from maunprekshak.scanner.report import SASTFinding, ScanResult, aggregate
 FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
-    "MP069", "MP073", "MP076", "MP077", "MP083", "MP090",
+    "MP069", "MP073", "MP076", "MP077", "MP083", "MP090", "MP098",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
     "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011", "TF016", "TF017",
-    "TF019", "TF020",
-    "DF002", "DF006", "DF011", "DF013", "DF016",
+    "TF019", "TF020", "TF024", "TF025",
+    "DF002", "DF006", "DF011", "DF013", "DF016", "DF018",
 }
 
 
@@ -307,6 +311,22 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
 
             elif finding.check_id == "MP090":
                 new_line = re.sub(r"\bTLSVersion\.TLSv1(?:_1|_0)?\b", "TLSVersion.TLSv1_2", new_line)
+
+            elif finding.check_id == "TF024":
+                new_line = re.sub(r"""\bclient_broker\s*=\s*['"](?:plaintext|tls_plaintext)['"]""", 'client_broker = "TLS"', new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "TF025":
+                new_line = re.sub(r"\bat_rest_encryption_enabled\s*=\s*false\b", "at_rest_encryption_enabled = true", new_line, flags=re.IGNORECASE)
+                new_line = re.sub(r"\btransit_encryption_enabled\s*=\s*false\b", "transit_encryption_enabled = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF018":
+                new_line = re.sub(r"\s+--insecure\b", "", new_line)
+                new_line = re.sub(r"\s+-k\b", "", new_line)
+                new_line = re.sub(r"\s+--no-check-certificate\b", "", new_line)
+
+            elif finding.check_id == "MP098":
+                new_line = re.sub(r"\bAutoAddPolicy\(\)", "RejectPolicy()", new_line)
+                new_line = re.sub(r"\bAutoAddPolicy\b", "RejectPolicy", new_line)
 
             if new_line != line:
                 lines[line_idx] = new_line

@@ -103,6 +103,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP090  Insecure TLS minimum_version  HIGH
 # MP091  Celery task global mutation   HIGH
 # MP092  zipfile extractall Zip Slip   HIGH
+# MP093  tempfile NamedTemporaryFile delete=False HIGH
+# MP094  hashlib pbkdf2 iterations < 100000   HIGH
+# MP095  Flask render_template_string f-string SSTI HIGH
+# MP096  joblib load unvalidated dynamic path HIGH
+# MP097  socket.bind wildcard 0.0.0.0 or ""   HIGH
+# MP098  paramiko set_missing_host_key_policy AutoAddPolicy HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -1417,6 +1423,89 @@ class SecurityVisitor(ast.NodeVisitor):
             self._add(node, "MP092", Severity.HIGH.value,
                       "Insecure archive extraction: zipfile extractall() without member path sanitization is vulnerable to Zip Slip directory traversal",
                       "Validate and sanitize archive member paths using os.path.commonpath() before extraction to prevent Zip Slip vulnerabilities.")
+
+        # MP093 — Insecure temporary file persistence: NamedTemporaryFile(delete=False)
+        if (func_name == "NamedTemporaryFile" or method == "NamedTemporaryFile" or full_func.endswith(".NamedTemporaryFile")):
+            has_delete_false = False
+            for kw in node.keywords:
+                if kw.arg == "delete" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    has_delete_false = True
+                    break
+            if not has_delete_false and len(node.args) >= 8:
+                arg7 = node.args[7]
+                if isinstance(arg7, ast.Constant) and arg7.value is False:
+                    has_delete_false = True
+            if has_delete_false:
+                self._add(node, "MP093", Severity.HIGH.value,
+                          "Insecure temporary file creation: tempfile.NamedTemporaryFile(delete=False) leaves sensitive unencrypted files on disk indefinitely",
+                          "Use delete=True or ensure temporary files are wrapped in a try/finally block or context manager with explicit os.unlink() cleanup.")
+
+        # MP094 — Insufficient PBKDF2 iterations in hashlib.pbkdf2_hmac (< 100,000)
+        if (func_name == "pbkdf2_hmac" or method == "pbkdf2_hmac" or full_func.endswith(".pbkdf2_hmac")):
+            iter_val = None
+            for kw in node.keywords:
+                if kw.arg == "iterations" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, (int, float)):
+                    iter_val = kw.value.value
+                    break
+            if iter_val is None and len(node.args) >= 4:
+                arg3 = node.args[3]
+                if isinstance(arg3, ast.Constant) and isinstance(arg3.value, (int, float)):
+                    iter_val = arg3.value
+            if iter_val is not None and iter_val < 100000:
+                self._add(node, "MP094", Severity.HIGH.value,
+                          f"Insufficient cryptographic iterations: hashlib.pbkdf2_hmac configured with {iter_val} iterations (less than 100,000)",
+                          "Increase PBKDF2 iterations to at least 600,000 (recommended by OWASP) or minimum 100,000 to defend against GPU brute-force attacks.")
+
+        # MP095 — Server-Side Template Injection (SSTI): render_template_string with dynamic formatting
+        if (func_name == "render_template_string" or method == "render_template_string" or full_func.endswith(".render_template_string")):
+            if node.args:
+                arg0 = node.args[0]
+                is_dynamic = False
+                if isinstance(arg0, (ast.JoinedStr, ast.BinOp)):
+                    is_dynamic = True
+                elif isinstance(arg0, ast.Call) and isinstance(arg0.func, ast.Attribute) and arg0.func.attr == "format":
+                    is_dynamic = True
+                if is_dynamic:
+                    self._add(node, "MP095", Severity.HIGH.value,
+                              "Server-Side Template Injection (SSTI): render_template_string called with dynamic string interpolation or f-string",
+                              "Pass data to render_template_string as template context variables instead of embedding them into the template string.")
+
+        # MP096 — Insecure deserialization: joblib.load() on unvalidated or dynamic file paths
+        if ((obj == "joblib" and method == "load") or full_func in ("joblib.load",) or (func_name == "load" and obj == "joblib")):
+            if node.args:
+                arg0 = node.args[0]
+                if isinstance(arg0, (ast.Name, ast.Call, ast.JoinedStr, ast.BinOp, ast.Attribute, ast.Subscript)):
+                    self._add(node, "MP096", Severity.HIGH.value,
+                              "Arbitrary code execution risk: joblib.load() called with dynamic/unvalidated file path",
+                              "Verify cryptographic HMAC/digital signatures before loading models with joblib.load(), or use safe model formats like safetensors or ONNX.")
+
+        # MP097 — Insecure socket binding to wildcard address ("0.0.0.0" or "")
+        if (func_name == "bind" or method == "bind" or full_func.endswith(".bind")):
+            if node.args and isinstance(node.args[0], (ast.Tuple, ast.List)) and len(node.args[0].elts) >= 2:
+                host_elt = node.args[0].elts[0]
+                if isinstance(host_elt, ast.Constant) and host_elt.value in ("", "0.0.0.0", "::"):
+                    self._add(node, "MP097", Severity.HIGH.value,
+                              f"Insecure socket binding: socket.bind() bound to wildcard address {repr(host_elt.value)} exposes service to all network interfaces",
+                              "Bind sockets to a specific loopback ('127.0.0.1') or private interface IP instead of wildcard addresses.")
+
+        # MP098 — Insecure SSH host key verification: paramiko AutoAddPolicy
+        if (func_name == "set_missing_host_key_policy" or method == "set_missing_host_key_policy" or full_func.endswith(".set_missing_host_key_policy")):
+            is_auto_add = False
+            for a in list(node.args) + [kw.value for kw in node.keywords]:
+                if isinstance(a, ast.Call):
+                    func_id = getattr(a.func, "id", None) or getattr(a.func, "attr", None)
+                    if func_id == "AutoAddPolicy":
+                        is_auto_add = True
+                        break
+                elif isinstance(a, (ast.Name, ast.Attribute)):
+                    name_id = getattr(a, "id", None) or getattr(a, "attr", None)
+                    if name_id == "AutoAddPolicy":
+                        is_auto_add = True
+                        break
+            if is_auto_add:
+                self._add(node, "MP098", Severity.HIGH.value,
+                          "Insecure SSH host key verification: paramiko set_missing_host_key_policy(AutoAddPolicy()) is vulnerable to Man-in-the-Middle (MITM) attacks",
+                          "Use paramiko.RejectPolicy() or paramiko.WarningPolicy() and pre-populate ~/.ssh/known_hosts to enforce host key validation.")
 
     def visit_Dict(self, node: ast.Dict) -> None:
         # MP072 — NoSQL Injection (MongoDB $where clause)

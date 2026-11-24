@@ -74,6 +74,12 @@ PATTERNS = {
     "Fastly API Token": r"(?i)(?:fastly.*api_token|FASTLY_API_TOKEN)\s*[:=]\s*['\"][a-zA-Z0-9_\-]{32}['\"]",
     "Linear Personal Access Token": r"\blin_pat_[a-zA-Z0-9]{40}\b",
     "HubSpot Private App Token": r"\bpat-na1-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b",
+    "CircleCI Personal API Token": r"(?i)(?:circleci.*token|circle_token)\s*[:=]\s*['\"][0-9a-fA-F]{40}['\"]",
+    "Mailchimp API Key": r"\b[0-9a-f]{32}-us[0-9]{1,2}\b",
+    "Contentful API Token": r"\bCFPAT-[a-zA-Z0-9_\-]{43,64}\b",
+    "Bitly Access Token": r"(?i)(?:bitly.*token|BITLY_TOKEN)\s*[:=]\s*['\"][0-9a-fA-F]{40}['\"]",
+    "Yandex Cloud IAM Token": r"\bt1\.[A-Za-z0-9_\-]{60,}\b",
+    "Sentry User Auth Token": r"\bsntryu_[a-f0-9]{64}\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

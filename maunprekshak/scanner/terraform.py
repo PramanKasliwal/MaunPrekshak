@@ -25,6 +25,10 @@ Rules:
   TF020 (HIGH)     - AWS OpenSearch cluster has encryption at rest or node-to-node encryption disabled
   TF021 (HIGH)     - AWS API Gateway endpoint missing authorizer (authorization = "NONE")
   TF022 (MEDIUM)   - AWS Lambda function missing customer KMS encryption key (kms_key_arn is null or empty)
+  TF023 (HIGH)     - AWS Secrets Manager secret missing customer-managed KMS key (kms_key_id is null or default)
+  TF024 (HIGH)     - AWS MSK Kafka cluster configured with unencrypted in-transit traffic (client_broker = "PLAINTEXT")
+  TF025 (HIGH)     - AWS ElastiCache replication group has at-rest or in-transit encryption disabled
+  TF026 (MEDIUM)   - AWS SNS topic subscription configured with unencrypted HTTP protocol (protocol = "http")
 """
 
 import os
@@ -368,6 +372,46 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                     file_path, lineno, "TF022", Severity.MEDIUM.value,
                     "AWS Lambda function environment variables missing customer-managed KMS encryption key (kms_key_arn is null or empty)",
                     "Configure kms_key_arn with a customer-managed AWS KMS key ARN to encrypt environment variables.",
+                    raw,
+                ))
+
+        # ─── TF023: AWS Secrets Manager Secret Missing Customer KMS Key ──────
+        if re.search(r"""kms_key_id\s*=\s*(?:""|''|null\b|["']aws/secretsmanager["'])""", line_lower):
+            if not _is_suppressed(raw, "TF023"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF023", Severity.HIGH.value,
+                    "AWS Secrets Manager secret is unencrypted or encrypted with default AWS key instead of customer-managed KMS key",
+                    "Specify a customer-managed AWS KMS key ID or ARN in kms_key_id.",
+                    raw,
+                ))
+
+        # ─── TF024: AWS MSK Kafka Cluster Unencrypted Client-Broker ──────────
+        if re.search(r"""client_broker\s*=\s*['"](?:plaintext|tls_plaintext)['"]""", line_lower):
+            if not _is_suppressed(raw, "TF024"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF024", Severity.HIGH.value,
+                    "AWS MSK Kafka cluster allows unencrypted client-broker in-transit traffic (client_broker = 'PLAINTEXT' or 'TLS_PLAINTEXT')",
+                    "Set client_broker = 'TLS' to enforce encrypted in-transit traffic.",
+                    raw,
+                ))
+
+        # ─── TF025: AWS ElastiCache Replication Group Encryption Disabled ────
+        if re.search(r"""at_rest_encryption_enabled\s*=\s*false\b""", line_lower) or re.search(r"""transit_encryption_enabled\s*=\s*false\b""", line_lower):
+            if not _is_suppressed(raw, "TF025"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF025", Severity.HIGH.value,
+                    "AWS ElastiCache replication group has at-rest or in-transit encryption disabled (encryption_enabled = false)",
+                    "Set at_rest_encryption_enabled = true and transit_encryption_enabled = true.",
+                    raw,
+                ))
+
+        # ─── TF026: AWS SNS Topic Subscription Unencrypted HTTP Protocol ─────
+        if re.search(r"""protocol\s*=\s*['"]http['"]""", line_lower):
+            if not _is_suppressed(raw, "TF026"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF026", Severity.MEDIUM.value,
+                    "AWS SNS topic subscription is configured with unencrypted HTTP endpoint (protocol = 'http')",
+                    "Use protocol = 'https' to ensure notifications are delivered over an encrypted channel.",
                     raw,
                 ))
 

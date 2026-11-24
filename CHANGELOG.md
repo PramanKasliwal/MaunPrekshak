@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-11-24
+
+### Added
+- **Multi-Ecosystem SCA Phase 10 (R renv.lock, Erlang rebar.lock & Gradle libs.versions.toml)**:
+  - Native manifest parsing for R projects using `renv`:
+    - `renv.lock`: parses packages and exact versions from JSON `"Packages"` dictionary, mapped to OSV ecosystem `"CRAN"`.
+  - Native manifest parsing for Erlang/OTP projects using `rebar3`:
+    - `rebar.lock`: parses Erlang term format `{pkg, <<"name">>, <<"version">>}` and binary tuples, mapped to OSV ecosystem `"Hex"`.
+  - Native manifest parsing for modern Android/JVM Gradle Version Catalogs:
+    - `libs.versions.toml` and `gradle/libs.versions.toml`: parses TOML version references and module coordinates (`group:name`), mapped to OSV ecosystem `"Maven"`.
+- **Cloud-Native & Container Security Expansion**:
+  - **`TF023`** (HIGH): AWS Secrets Manager secret missing customer-managed KMS key (`kms_key_id = null`, `""`, or default `"aws/secretsmanager"`).
+  - **`TF024`** (HIGH): AWS MSK Kafka cluster configured with unencrypted in-transit traffic (`client_broker = "PLAINTEXT"` or `"TLS_PLAINTEXT"`).
+  - **`TF025`** (HIGH): AWS ElastiCache replication group has at-rest or in-transit encryption disabled (`at_rest_encryption_enabled = false` or `transit_encryption_enabled = false`).
+  - **`TF026`** (MEDIUM): AWS SNS topic subscription configured with unencrypted HTTP protocol (`protocol = "http"`).
+  - **`DF017`** (CRITICAL): Sensitive cryptographic keys or certificates copied into container image via `COPY` or `ADD` (`.pem`, `.key`, `.pfx`, `.pkcs12`, `id_rsa`, `id_ed25519`) (CWE-312).
+  - **`DF018`** (HIGH): Insecure remote file downloads with TLS certificate verification disabled (`-k`, `--insecure`, `--no-check-certificate`) in container `RUN` instructions (CWE-295).
+- **Advanced AST SAST Rules Phase 10 (`MP093`–`MP098`)**:
+  - **`MP093`** (HIGH): Insecure temporary file persistence: `tempfile.NamedTemporaryFile(delete=False)` leaves sensitive unencrypted files on disk indefinitely (CWE-377).
+  - **`MP094`** (HIGH): Insufficient cryptographic iterations: `hashlib.pbkdf2_hmac()` configured with fewer than 100,000 iterations (CWE-326, CWE-916).
+  - **`MP095`** (HIGH): Server-Side Template Injection (SSTI): Flask `render_template_string()` called with dynamic string interpolation, f-string, or concatenation (CWE-1336).
+  - **`MP096`** (HIGH): Insecure deserialization: `joblib.load()` on unvalidated or dynamic file paths without signature verification (CWE-502).
+  - **`MP097`** (HIGH): Insecure socket binding: `socket.bind()` bound to wildcard address (`"0.0.0.0"` or `""`) exposes service to all network interfaces without TLS (CWE-200).
+  - **`MP098`** (HIGH): Insecure SSH client host key verification: `paramiko.SSHClient.set_missing_host_key_policy(AutoAddPolicy())` vulnerable to Man-in-the-Middle (MITM) attacks (CWE-295).
+- **DevOps & Cloud Secrets Detection Phase 10 (`MP-SEC-063`–`MP-SEC-068`)**:
+  - High-precision token patterns for:
+    - CircleCI Personal API Tokens (`circleci.*token` / `circle_token` 40-char hex).
+    - Mailchimp API Keys (`[0-9a-f]{32}-us[0-9]{1,2}`).
+    - Contentful Delivery and Management API Tokens (`CFPAT-[a-zA-Z0-9_\-]{43,64}`).
+    - Bitly Access Tokens (`bitly.*token` / `BITLY_TOKEN` 40-char hex).
+    - Yandex Cloud IAM / OAuth Tokens (`t1.[A-Za-z0-9_\-]{60,}`).
+    - Sentry User Auth Tokens (`sntryu_[a-f0-9]{64}`).
+- **Deterministic Mechanical Auto-Fixing Engine Phase 10 (`--fix` Expansion)**:
+  - `TF024`: Automatically enforce MSK in-transit TLS: `client_broker = "PLAINTEXT"` / `"TLS_PLAINTEXT"` $\rightarrow$ `client_broker = "TLS"`.
+  - `TF025`: Automatically enable ElastiCache encryption: `at_rest_encryption_enabled = false` $\rightarrow$ `true`, `transit_encryption_enabled = false` $\rightarrow$ `true`.
+  - `DF018`: Automatically strip insecure download flags (`--insecure`, `-k`, `--no-check-certificate`) from container `RUN` instructions.
+  - `MP098`: Automatically upgrade Paramiko host key verification: `AutoAddPolicy()` $\rightarrow$ `RejectPolicy()`.
+
 ## [0.20.0] - 2026-10-27
 
 ### Added

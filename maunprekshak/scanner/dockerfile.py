@@ -345,6 +345,37 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                     code_snippet=raw_line.strip(),
                 ))
 
+        # DF017 — Sensitive cryptographic key or certificate copied into container image
+        if inst_upper.startswith(("COPY ", "ADD ")) and re.search(r"\b(?:[^\s]*\.(?:pem|key|pkcs12|pfx)|id_rsa|id_dsa|id_ed25519)\b", full_inst, re.IGNORECASE):
+            if not _is_suppressed(raw_line, "DF017"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF017",
+                    severity=Severity.CRITICAL.value,
+                    description="Sensitive cryptographic key or certificate copied into container image via COPY/ADD",
+                    recommendation="Do not bake private keys or certificates into container images. Use runtime secret mounts or environment variables.",
+                    code_snippet=raw_line.strip(),
+                ))
+
+        # DF018 — Insecure remote file download with TLS verification disabled
+        if inst_upper.startswith("RUN ") and (
+            re.search(r"\bcurl\b.*?(?:^|[\s\"'=])(?:-k|--insecure)\b", full_inst, re.IGNORECASE) or
+            re.search(r"\bwget\b.*?(?:^|[\s\"'=])--no-check-certificate\b", full_inst, re.IGNORECASE)
+        ):
+            if not _is_suppressed(raw_line, "DF018"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF018",
+                    severity=Severity.HIGH.value,
+                    description="Insecure remote file download with TLS certificate validation disabled (-k, --insecure, --no-check-certificate)",
+                    recommendation="Enable TLS verification by removing -k/--insecure/--no-check-certificate flags and installing valid CA certificates.",
+                    code_snippet=raw_line.strip(),
+                ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1
