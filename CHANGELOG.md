@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-11-27
+
+### Added
+- **Multi-Ecosystem SCA Phase 11 (Scala build.sbt, Clojure deps.edn & project.clj, Debian debian/control)**:
+  - Native manifest parsing for Scala projects using sbt:
+    - `build.sbt`: parses Scala single and sequence `libraryDependencies` (`%` and `%%`), mapped to OSV ecosystem `"Maven"`.
+  - Native manifest parsing for Clojure projects using tools.deps and Leiningen:
+    - `deps.edn`: parses `:mvn/version` dependencies within `:deps` EDN maps, mapped to OSV ecosystem `"Maven"`.
+    - `project.clj`: parses Leiningen vector dependencies (`[group/artifact "version"]`) within `:dependencies`, mapped to OSV ecosystem `"Maven"`.
+  - Native manifest parsing for Debian and Ubuntu packages:
+    - `debian/control`: parses binary and source package dependencies within `Depends:` headers, mapped to OSV ecosystem `"Debian"`.
+- **Cloud-Native & Container Security Expansion**:
+  - **`TF027`** (HIGH): AWS CloudWatch Log Group missing customer-managed KMS key (`kms_key_id = null`, `""`, or unconfigured).
+  - **`TF028`** (HIGH): AWS ECR repository missing vulnerability scan on push or allowing mutable image tags (`scan_on_push = false`, `image_tag_mutability = "MUTABLE"`).
+  - **`TF029`** (HIGH): AWS Redshift cluster missing encryption at rest (`encrypted = false` or unconfigured).
+  - **`TF030`** (MEDIUM): AWS CloudWatch Log Group indefinite retention (`retention_in_days = 0` or unconfigured).
+  - **`DF019`** (MEDIUM): Missing `--no-install-recommends` flag in container `apt-get install` / `apt install` instructions.
+  - **`DF020`** (HIGH): Insecure package manager integrity flags (`--trusted-host`, `--unsafe-perm`, `--ignore-engines`) disabling security checks.
+- **Century Milestone: Advanced AST SAST Rules Phase 11 (`MP099`–`MP104`)**:
+  - **Crossing the 100-Rule SAST Milestone (`MP100`)**:
+  - **`MP099`** (HIGH): Insecure RSA public exponent less than 65537 (`public_exponent < 65537` or `e=3`) vulnerable to Coppersmith's and small subgroup attacks (CWE-326).
+  - **`MP100`** (HIGH): Insecure session and CSRF cookie configuration: `SESSION_COOKIE_HTTPONLY = False`, `SESSION_COOKIE_SECURE = False`, `CSRF_COOKIE_HTTPONLY = False`, or `set_cookie(httponly=False)` exposing tokens to XSS interception or transport sniffing (CWE-614, CWE-1004).
+  - **`MP101`** (HIGH): Pandas `read_sql` / `read_sql_query` SQL injection via dynamic string interpolation, f-string, or `.format()` (CWE-89).
+  - **`MP102`** (HIGH): Predictable PRNG seed initialization: seeding `random.seed()` with static constants or `time.time()` (CWE-330).
+  - **`MP103`** (HIGH): Insecure `yaml.dump()` with `Dumper=yaml.Dumper` enabling arbitrary Python object serialization and code execution (CWE-502).
+  - **`MP104`** (HIGH): Path traversal vulnerability: `shutil.unpack_archive()` without extraction path validation susceptible to Zip Slip directory traversal (CWE-22).
+- **DevOps & Cloud Secrets Detection Phase 11 (`MP-SEC-069`–`MP-SEC-074`)**:
+  - High-precision token patterns for:
+    - SonarQube Tokens (`(?:sqp|sqa|squ)_[a-f0-9]{40}`).
+    - Alibaba Cloud AccessKey IDs (`LTAI[0-9a-zA-Z]{16,24}`).
+    - Figma Personal Access Tokens (`figd_[A-Za-z0-9_\-]{40,}`).
+    - JFrog / Artifactory API Tokens (`AKCP[a-zA-Z0-9]{64}`).
+    - Dynatrace API Tokens (`dt0c01\.[A-Za-z0-9]{24}\.[A-Za-z0-9]{64}`).
+    - Fly.io Access Tokens (`fo1_[a-zA-Z0-9_\-]{43,}`).
+- **Deterministic Mechanical Auto-Fixing Engine Phase 11 (`--fix` Expansion)**:
+  - `TF028`: Automatically enable ECR image scanning: `scan_on_push = false` $\rightarrow$ `scan_on_push = true`.
+  - `TF029`: Automatically enable Redshift cluster encryption: `encrypted = false` $\rightarrow$ `encrypted = true`.
+  - `DF019`: Automatically append `--no-install-recommends` to `apt-get install` instructions.
+  - `MP099`: Automatically upgrade RSA public exponent to 65537 (`public_exponent=65537`, `e=65537`).
+  - `MP100`: Automatically enforce secure cookie settings: `SESSION_COOKIE_HTTPONLY = True`, `SESSION_COOKIE_SECURE = True`, `CSRF_COOKIE_HTTPONLY = True`, `httponly=True`, `secure=True`.
+
 ## [0.21.0] - 2026-11-24
 
 ### Added

@@ -376,6 +376,38 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                     code_snippet=raw_line.strip(),
                 ))
 
+        # DF019 — apt-get install executed without --no-install-recommends
+        if inst_upper.startswith("RUN ") and re.search(r"\bapt(?:-get)?\s+install\b", full_inst, re.IGNORECASE):
+            if "--no-install-recommends" not in full_inst.lower() and not _is_suppressed(raw_line, "DF019"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF019",
+                    severity=Severity.MEDIUM.value,
+                    description="apt-get install executed without '--no-install-recommends' flag",
+                    recommendation="Add '--no-install-recommends' to apt/apt-get install commands to avoid installing unnecessary default packages and minimize attack surface.",
+                    code_snippet=raw_line.strip(),
+                ))
+
+        # DF020 — Insecure package manager flags bypassing TLS or security checks
+        if inst_upper.startswith("RUN ") and (
+            re.search(r"\bpip(?:3)?\s+install\b.*?(?:^|[\s\"'=])--trusted-host\b", full_inst, re.IGNORECASE) or
+            re.search(r"\bnpm\s+install\b.*?(?:^|[\s\"'=])--unsafe-perm\b", full_inst, re.IGNORECASE) or
+            re.search(r"\byarn\s+install\b.*?(?:^|[\s\"'=])--ignore-engines\b", full_inst, re.IGNORECASE)
+        ):
+            if not _is_suppressed(raw_line, "DF020"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF020",
+                    severity=Severity.HIGH.value,
+                    description="Insecure package manager installation flag bypassing verification or privileges (--trusted-host, --unsafe-perm)",
+                    recommendation="Remove insecure package manager flags. Ensure dependencies are fetched over verified TLS connections without elevated script permissions.",
+                    code_snippet=raw_line.strip(),
+                ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1

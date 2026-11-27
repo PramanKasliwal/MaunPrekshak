@@ -29,6 +29,10 @@ Rules:
   TF024 (HIGH)     - AWS MSK Kafka cluster configured with unencrypted in-transit traffic (client_broker = "PLAINTEXT")
   TF025 (HIGH)     - AWS ElastiCache replication group has at-rest or in-transit encryption disabled
   TF026 (MEDIUM)   - AWS SNS topic subscription configured with unencrypted HTTP protocol (protocol = "http")
+  TF027 (HIGH)     - AWS CloudWatch Log Group missing customer-managed KMS key (kms_key_id is null or empty)
+  TF028 (HIGH)     - AWS ECR repository missing image scan on push or tag immutability disabled
+  TF029 (HIGH)     - AWS Redshift cluster missing encryption at rest (encrypted = false)
+  TF030 (MEDIUM)   - AWS CloudWatch Log Group retention set to indefinite or never expire (retention_in_days = 0)
 """
 
 import os
@@ -114,6 +118,8 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
     sg_port_line = None
     sg_protocol = None
 
+    brace_depth = 0
+
     in_iam_policy = False
     has_wildcard_action = False
     has_wildcard_resource = False
@@ -123,14 +129,105 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
     rds_start_line = None
     rds_has_kms = False
 
+    in_cloudwatch_lg = False
+    cw_start_line = None
+    cw_has_kms = False
+    cw_kms_flagged = False
+    cw_has_retention = False
+    cw_retention_flagged = False
+    cw_depth = 0
+
+    in_redshift = False
+    redshift_start_line = None
+    redshift_has_encryption = False
+    redshift_flagged = False
+    redshift_depth = 0
+
+    in_ecr = False
+    ecr_start_line = None
+    ecr_has_scan = False
+    ecr_has_immutable = False
+    ecr_flagged = False
+    ecr_depth = 0
+
     in_default_sg = False
     in_ebs_default_encryption = False
     in_opensearch_encrypt = False
+
+    def _check_and_close_blocks():
+        nonlocal in_rds_resource, rds_start_line, rds_has_kms
+        nonlocal in_cloudwatch_lg, cw_start_line, cw_has_kms, cw_kms_flagged, cw_has_retention, cw_retention_flagged
+        nonlocal in_redshift, redshift_start_line, redshift_has_encryption, redshift_flagged
+        nonlocal in_ecr, ecr_start_line, ecr_has_scan, ecr_has_immutable, ecr_flagged
+
+        if in_rds_resource:
+            if not rds_has_kms and rds_start_line is not None:
+                raw_start = lines[rds_start_line - 1]
+                if not _is_suppressed(raw_start, "TF012"):
+                    findings.append(_make_finding(
+                        file_path, rds_start_line, "TF012", Severity.HIGH.value,
+                        "AWS RDS database resource missing customer-managed KMS encryption key (kms_key_id)",
+                        "Specify a customer-managed AWS KMS key using kms_key_id = aws_kms_key.example.arn.",
+                        raw_start.strip(),
+                    ))
+            in_rds_resource = False
+            rds_start_line = None
+
+        if in_cloudwatch_lg:
+            if not cw_has_kms and not cw_kms_flagged and cw_start_line is not None:
+                raw_start = lines[cw_start_line - 1]
+                if not _is_suppressed(raw_start, "TF027"):
+                    findings.append(_make_finding(
+                        file_path, cw_start_line, "TF027", Severity.HIGH.value,
+                        "AWS CloudWatch Log Group missing customer-managed KMS encryption key (kms_key_id is null or unconfigured)",
+                        "Configure kms_key_id with a customer-managed AWS KMS key ARN to encrypt stored log events.",
+                        raw_start.strip(),
+                    ))
+            if not cw_has_retention and not cw_retention_flagged and cw_start_line is not None:
+                raw_start = lines[cw_start_line - 1]
+                if not _is_suppressed(raw_start, "TF030"):
+                    findings.append(_make_finding(
+                        file_path, cw_start_line, "TF030", Severity.MEDIUM.value,
+                        "AWS CloudWatch Log Group retention set to indefinite / never expire (retention_in_days unconfigured or 0)",
+                        "Set retention_in_days to a compliant non-zero value (e.g. 90, 180, or 365 days) according to retention policies.",
+                        raw_start.strip(),
+                    ))
+            in_cloudwatch_lg = False
+            cw_start_line = None
+
+        if in_redshift:
+            if not redshift_has_encryption and not redshift_flagged and redshift_start_line is not None:
+                raw_start = lines[redshift_start_line - 1]
+                if not _is_suppressed(raw_start, "TF029"):
+                    findings.append(_make_finding(
+                        file_path, redshift_start_line, "TF029", Severity.HIGH.value,
+                        "AWS Redshift data warehouse cluster has encryption at rest disabled (encrypted = false or unconfigured)",
+                        "Set encrypted = true and specify kms_key_id to encrypt Redshift clusters at rest.",
+                        raw_start.strip(),
+                    ))
+            in_redshift = False
+            redshift_start_line = None
+
+        if in_ecr:
+            if (not ecr_has_scan or not ecr_has_immutable) and not ecr_flagged and ecr_start_line is not None:
+                raw_start = lines[ecr_start_line - 1]
+                if not _is_suppressed(raw_start, "TF028"):
+                    findings.append(_make_finding(
+                        file_path, ecr_start_line, "TF028", Severity.HIGH.value,
+                        "AWS ECR repository has vulnerability scanning on push disabled or allows mutable image tags",
+                        "Set scan_on_push = true and image_tag_mutability = 'IMMUTABLE' on ECR repositories.",
+                        raw_start.strip(),
+                    ))
+            in_ecr = False
+            ecr_start_line = None
 
     for idx, raw in enumerate(lines):
         lineno = idx + 1
         line = raw.strip()
         line_lower = line.lower()
+
+        if line_lower.startswith('resource "'):
+            _check_and_close_blocks()
 
         # ─── TF007: Hardcoded Plaintext Secrets in .tf / .tfvars ─────────────
         # Pattern: password = "plain" or secret_key = "plain" (excluding variable references like var.xyz)
@@ -415,6 +512,95 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                     raw,
                 ))
 
+        # ─── TF027 & TF030: AWS CloudWatch Log Group Block Tracking ─────────
+        if 'resource "aws_cloudwatch_log_group"' in line_lower:
+            in_cloudwatch_lg = True
+            cw_start_line = lineno
+            cw_has_kms = False
+            cw_kms_flagged = False
+            cw_has_retention = False
+            cw_retention_flagged = False
+
+        if in_cloudwatch_lg:
+            if re.search(r"""kms_key_id\s*=\s*["'][^"'\s]+["']""", line_lower) or re.search(r"""kms_key_id\s*=\s*aws_kms_key\.""", line_lower):
+                cw_has_kms = True
+            elif re.search(r"""kms_key_id\s*=\s*(?:""|''|null\b)""", line_lower):
+                if not _is_suppressed(raw, "TF027"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "TF027", Severity.HIGH.value,
+                        "AWS CloudWatch Log Group missing customer-managed KMS encryption key (kms_key_id is null or empty)",
+                        "Configure kms_key_id with a customer-managed AWS KMS key ARN to encrypt stored log events.",
+                        raw,
+                    ))
+                    cw_kms_flagged = True
+
+            ret_match = re.search(r"""retention_in_days\s*=\s*(\d+)""", line_lower)
+            if ret_match:
+                if int(ret_match.group(1)) > 0:
+                    cw_has_retention = True
+                else:
+                    if not _is_suppressed(raw, "TF030"):
+                        findings.append(_make_finding(
+                            file_path, lineno, "TF030", Severity.MEDIUM.value,
+                            "AWS CloudWatch Log Group retention set to indefinite / never expire (retention_in_days = 0)",
+                            "Set retention_in_days to a compliant non-zero value (e.g. 90, 180, or 365 days) according to retention policies.",
+                            raw,
+                        ))
+                        cw_retention_flagged = True
+
+        # ─── TF028: AWS ECR Repository Tracking ─────────────────────────────
+        if 'resource "aws_ecr_repository"' in line_lower:
+            in_ecr = True
+            ecr_start_line = lineno
+            ecr_has_scan = False
+            ecr_has_immutable = False
+            ecr_flagged = False
+
+        if in_ecr:
+            if re.search(r"""scan_on_push\s*=\s*true\b""", line_lower):
+                ecr_has_scan = True
+            elif re.search(r"""scan_on_push\s*=\s*false\b""", line_lower):
+                if not _is_suppressed(raw, "TF028"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "TF028", Severity.HIGH.value,
+                        "AWS ECR repository has vulnerability scanning on push disabled or allows mutable image tags",
+                        "Set scan_on_push = true and image_tag_mutability = 'IMMUTABLE' on ECR repositories.",
+                        raw,
+                    ))
+                    ecr_flagged = True
+
+            if re.search(r"""image_tag_mutability\s*=\s*['"]immutable['"]""", line_lower):
+                ecr_has_immutable = True
+            elif re.search(r"""image_tag_mutability\s*=\s*['"]mutable['"]""", line_lower):
+                if not _is_suppressed(raw, "TF028"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "TF028", Severity.HIGH.value,
+                        "AWS ECR repository has vulnerability scanning on push disabled or allows mutable image tags",
+                        "Set scan_on_push = true and image_tag_mutability = 'IMMUTABLE' on ECR repositories.",
+                        raw,
+                    ))
+                    ecr_flagged = True
+
+        # ─── TF029: AWS Redshift Cluster Tracking ───────────────────────────
+        if 'resource "aws_redshift_cluster"' in line_lower:
+            in_redshift = True
+            redshift_start_line = lineno
+            redshift_has_encryption = False
+            redshift_flagged = False
+
+        if in_redshift:
+            if re.search(r"""encrypted\s*=\s*true\b""", line_lower):
+                redshift_has_encryption = True
+            elif re.search(r"""encrypted\s*=\s*false\b""", line_lower):
+                if not _is_suppressed(raw, "TF029"):
+                    findings.append(_make_finding(
+                        file_path, lineno, "TF029", Severity.HIGH.value,
+                        "AWS Redshift data warehouse cluster has encryption at rest disabled (encrypted = false)",
+                        "Set encrypted = true and specify kms_key_id to encrypt Redshift clusters at rest.",
+                        raw,
+                    ))
+                    redshift_flagged = True
+
         # ─── TF001 & TF010: Security Group Open Ingress Tracking ─────────────
         if "ingress" in line_lower or "aws_security_group" in line_lower:
             in_security_group_or_ingress = True
@@ -473,18 +659,8 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
         if line == "}" or line == "},":
             in_security_group_or_ingress = False
             sg_protocol = None
-            if in_rds_resource:
-                if not rds_has_kms and rds_start_line is not None:
-                    raw_start = lines[rds_start_line - 1]
-                    if not _is_suppressed(raw_start, "TF012"):
-                        findings.append(_make_finding(
-                            file_path, rds_start_line, "TF012", Severity.HIGH.value,
-                            "AWS RDS database resource missing customer-managed KMS encryption key (kms_key_id)",
-                            "Specify a customer-managed AWS KMS key using kms_key_id = aws_kms_key.example.arn.",
-                            raw_start.strip(),
-                        ))
-                in_rds_resource = False
-                rds_start_line = None
+            if not raw.startswith(("  ", "    ", "\t")):
+                _check_and_close_blocks()
             in_default_sg = False
             in_opensearch_encrypt = False
 

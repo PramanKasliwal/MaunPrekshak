@@ -109,6 +109,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP096  joblib load unvalidated dynamic path HIGH
 # MP097  socket.bind wildcard 0.0.0.0 or ""   HIGH
 # MP098  paramiko set_missing_host_key_policy AutoAddPolicy HIGH
+# MP099  Insecure RSA public exponent < 65537 HIGH
+# MP100  Insecure session/CSRF cookie settings HIGH
+# MP101  pandas.read_sql SQL injection f-string HIGH
+# MP102  random.seed predictable constant initialization HIGH
+# MP103  yaml.dump Dumper=yaml.Dumper code execution HIGH
+# MP104  shutil.unpack_archive Zip Slip traversal HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -1507,6 +1513,119 @@ class SecurityVisitor(ast.NodeVisitor):
                           "Insecure SSH host key verification: paramiko set_missing_host_key_policy(AutoAddPolicy()) is vulnerable to Man-in-the-Middle (MITM) attacks",
                           "Use paramiko.RejectPolicy() or paramiko.WarningPolicy() and pre-populate ~/.ssh/known_hosts to enforce host key validation.")
 
+        # MP099 — Insecure RSA public exponent < 65537
+        if (
+            func_name in ("generate_private_key", "generate")
+            or method in ("generate_private_key", "generate")
+            or any(k in full_func for k in ("generate_private_key", "RSA.generate", "rsa.generate"))
+        ):
+            insecure_exp = False
+            for kw in node.keywords:
+                if kw.arg in ("public_exponent", "e") and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int):
+                    if kw.value.value < 65537:
+                        insecure_exp = True
+                        break
+            if not insecure_exp:
+                if "generate_private_key" in full_func or func_name == "generate_private_key":
+                    if len(node.args) >= 1 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, int) and node.args[0].value < 65537:
+                        insecure_exp = True
+                elif "RSA.generate" in full_func or (obj == "RSA" and func_name == "generate"):
+                    if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, int) and node.args[1].value < 65537:
+                        insecure_exp = True
+            if insecure_exp:
+                self._add(node, "MP099", Severity.HIGH.value,
+                          "Insecure RSA public exponent: using an exponent less than 65537 (such as e=3) is vulnerable to Coppersmith's attack and small subgroup attacks",
+                          "Use 65537 (0x10001) or higher as the RSA public exponent (e.g. public_exponent=65537).")
+
+        # MP100 — Insecure set_cookie call with httponly=False or secure=False
+        if func_name == "set_cookie" or method == "set_cookie" or full_func.endswith(".set_cookie"):
+            for kw in node.keywords:
+                if kw.arg in ("httponly", "secure") and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    self._add(
+                        node, "MP100", Severity.HIGH.value,
+                        f"Insecure cookie flag: set_cookie called with {kw.arg}=False exposes cookie to unauthorized access",
+                        f"Set {kw.arg}=True when creating sensitive cookies to prevent client-side script access and unencrypted transmission."
+                    )
+                    break
+
+        # MP101 — Pandas read_sql SQL injection with dynamic formatting
+        if (
+            func_name in ("read_sql", "read_sql_query", "read_sql_table")
+            or method in ("read_sql", "read_sql_query", "read_sql_table")
+            or any(f in full_func for f in ("read_sql", "read_sql_query", "read_sql_table"))
+        ):
+            sql_arg = None
+            for kw in node.keywords:
+                if kw.arg in ("sql", "query"):
+                    sql_arg = kw.value
+                    break
+            if sql_arg is None and node.args:
+                sql_arg = node.args[0]
+            if sql_arg is not None:
+                is_dyn_sql = isinstance(sql_arg, (ast.JoinedStr, ast.BinOp)) or (
+                    isinstance(sql_arg, ast.Call)
+                    and isinstance(sql_arg.func, ast.Attribute)
+                    and sql_arg.func.attr == "format"
+                )
+                if is_dyn_sql:
+                    self._add(
+                        node, "MP101", Severity.HIGH.value,
+                        "SQL injection: pandas read_sql/read_sql_query constructed with dynamic string interpolation",
+                        "Use parameterized SQL queries with the 'params' parameter (e.g., pd.read_sql('SELECT * FROM users WHERE id = %(id)s', con, params={'id': user_id}))."
+                    )
+
+        # MP102 — Predictable PRNG seed initialization
+        if (func_name == "seed" and (obj == "random" or "random" in full_func)) or full_func.endswith("random.seed"):
+            if node.args:
+                arg0 = node.args[0]
+                is_predictable = False
+                if isinstance(arg0, ast.Constant) and isinstance(arg0.value, (int, float, str)):
+                    is_predictable = True
+                elif isinstance(arg0, ast.Call):
+                    def _has_time_call(call_node: ast.AST) -> bool:
+                        if isinstance(call_node, ast.Call):
+                            fn_id = getattr(call_node.func, "id", "") or getattr(call_node.func, "attr", "")
+                            if "time" in fn_id:
+                                return True
+                            for a in call_node.args:
+                                if _has_time_call(a):
+                                    return True
+                        return False
+                    if _has_time_call(arg0):
+                        is_predictable = True
+                if is_predictable:
+                    self._add(
+                        node, "MP102", Severity.HIGH.value,
+                        "Predictable PRNG seed initialization: seeding random with a static constant or predictable time value allows attackers to reconstruct pseudo-random sequences",
+                        "Use secrets module (e.g. secrets.token_hex(), secrets.randbelow()) or os.urandom for cryptographically secure randomness."
+                    )
+
+        # MP103 — Insecure yaml.dump with Dumper=yaml.Dumper
+        if (func_name == "dump" and (obj == "yaml" or "yaml" in full_func)) or full_func.endswith("yaml.dump"):
+            for kw in node.keywords:
+                if kw.arg == "Dumper":
+                    dumper_name = getattr(kw.value, "id", None) or getattr(kw.value, "attr", None)
+                    if dumper_name in ("Dumper", "CDumper"):
+                        self._add(
+                            node, "MP103", Severity.HIGH.value,
+                            "Insecure YAML dump: yaml.dump with Dumper=yaml.Dumper enables arbitrary Python object serialization and unsafe code execution vulnerabilities",
+                            "Use yaml.safe_dump() or Dumper=yaml.SafeDumper to restrict YAML emission to standard types."
+                        )
+                        break
+
+        # MP104 — Insecure shutil.unpack_archive (Zip Slip vulnerability)
+        if (
+            func_name == "unpack_archive"
+            or method == "unpack_archive"
+            or full_func.endswith("unpack_archive")
+            or (obj == "shutil" and method == "unpack_archive")
+        ):
+            self._add(
+                node, "MP104", Severity.HIGH.value,
+                "Path traversal vulnerability: shutil.unpack_archive without extraction path validation is susceptible to Zip Slip directory traversal",
+                "Validate archive member paths before extraction using zipfile/tarfile or ensure extract_dir is strictly sanitized with os.path.commonpath."
+            )
+
     def visit_Dict(self, node: ast.Dict) -> None:
         # MP072 — NoSQL Injection (MongoDB $where clause)
         for k, v in zip(node.keys, node.values):
@@ -1692,6 +1811,36 @@ class SecurityVisitor(ast.NodeVisitor):
                     self._add(node, "MP090", Severity.HIGH.value,
                               "Insecure TLS protocol version: minimum_version configured with deprecated TLSv1 or TLSv1_1",
                               "Enforce modern TLS versions by setting context.minimum_version = ssl.TLSVersion.TLSv1_2 or TLSv1_3.")
+
+            # MP100 — Insecure session/CSRF cookie configuration
+            cookie_setting = None
+            if isinstance(target, ast.Name) and target.id in (
+                "SESSION_COOKIE_HTTPONLY", "SESSION_COOKIE_SECURE", "CSRF_COOKIE_HTTPONLY", "SESSION_COOKIE_SAMESITE"
+            ):
+                cookie_setting = target.id
+            elif isinstance(target, ast.Attribute) and target.attr in (
+                "SESSION_COOKIE_HTTPONLY", "SESSION_COOKIE_SECURE", "CSRF_COOKIE_HTTPONLY", "SESSION_COOKIE_SAMESITE"
+            ):
+                cookie_setting = target.attr
+            elif isinstance(target, ast.Subscript):
+                if isinstance(target.slice, ast.Constant) and target.slice.value in (
+                    "SESSION_COOKIE_HTTPONLY", "SESSION_COOKIE_SECURE", "CSRF_COOKIE_HTTPONLY", "SESSION_COOKIE_SAMESITE"
+                ):
+                    cookie_setting = str(target.slice.value)
+
+            if cookie_setting:
+                is_insecure = False
+                if isinstance(node.value, ast.Constant):
+                    if cookie_setting == "SESSION_COOKIE_SAMESITE" and (node.value.value is None or node.value.value is False):
+                        is_insecure = True
+                    elif node.value.value is False:
+                        is_insecure = True
+                if is_insecure:
+                    self._add(
+                        node, "MP100", Severity.HIGH.value,
+                        f"Insecure cookie security setting: '{cookie_setting}' explicitly disabled, exposing session tokens to XSS interception or transport sniffing",
+                        f"Enforce secure cookie attributes: set {cookie_setting} = True in production settings."
+                    )
 
         self.generic_visit(node)
 

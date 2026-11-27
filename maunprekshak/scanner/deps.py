@@ -1601,6 +1601,130 @@ def parse_gradle_version_catalog(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_sbt_file(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Scala sbt file (build.sbt) and extract Maven dependencies.
+    Matches libraryDependencies declarations in either % or %% syntax:
+    "group" % "artifact" % "version" or "group" %% "artifact" % "version"
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        seen = set()
+        pattern = re.compile(
+            r"""["']([a-zA-Z0-9_\-\.]+)["']\s*%%?\s*["']([a-zA-Z0-9_\-\.]+)["']\s*%\s*["']([a-zA-Z0-9_\-\.]+)["']"""
+        )
+        for m in pattern.finditer(content):
+            group = m.group(1).strip()
+            artifact = m.group(2).strip()
+            ver = m.group(3).strip()
+            full_pkg = f"{group}:{artifact}"
+            if full_pkg not in seen:
+                seen.add(full_pkg)
+                packages.append((full_pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_clojure_deps_edn(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Clojure deps.edn manifest and extract Maven dependencies.
+    Matches :mvn/version specifications within :deps blocks.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        seen = set()
+        pattern = re.compile(
+            r"""(?:^|[\s{])([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+|[a-zA-Z0-9_\-\.]+)\s*\{[^{}]*?:mvn/version\s*["']([^"']+)["']"""
+        )
+        for m in pattern.finditer(content):
+            raw_pkg = m.group(1).strip()
+            ver = m.group(2).strip()
+            pkg = raw_pkg.replace("/", ":") if "/" in raw_pkg else f"{raw_pkg}:{raw_pkg}"
+            if pkg not in seen:
+                seen.add(pkg)
+                packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_leiningen_project_clj(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Leiningen project.clj manifest and extract Maven dependencies.
+    Matches [group/artifact "version"] inside :dependencies.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        seen = set()
+        dep_section_match = re.search(r":dependencies\s*\[(.*?)\]\s*(?:\n\s*:[a-zA-Z]|\)\s*$)", content, re.DOTALL)
+        target_content = dep_section_match.group(1) if dep_section_match else content
+        pattern = re.compile(
+            r"""\[\s*([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+|[a-zA-Z0-9_\-\.]+)\s+["']([^"']+)["']"""
+        )
+        for m in pattern.finditer(target_content):
+            raw_pkg = m.group(1).strip()
+            ver = m.group(2).strip()
+            pkg = raw_pkg.replace("/", ":") if "/" in raw_pkg else f"{raw_pkg}:{raw_pkg}"
+            if pkg not in seen:
+                seen.add(pkg)
+                packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_debian_control(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse a Debian package control file (debian/control) and extract dependencies.
+    Extracts from Build-Depends, Build-Depends-Indep, Depends, and Pre-Depends fields.
+    """
+    packages: List[tuple[str, str]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        current_field = None
+        field_content: Dict[str, str] = {}
+        target_fields = {"build-depends", "build-depends-indep", "depends", "pre-depends"}
+        for line in lines:
+            if not line.strip() or line.startswith("#"):
+                continue
+            if line[0].isspace() and current_field:
+                field_content[current_field] += " " + line.strip()
+            elif ":" in line:
+                name, _, val = line.partition(":")
+                clean_name = name.strip().lower()
+                if clean_name in target_fields:
+                    current_field = clean_name
+                    field_content[current_field] = field_content.get(current_field, "") + " " + val.strip()
+                else:
+                    current_field = None
+        seen = set()
+        entry_pattern = re.compile(r"^([a-z0-9][a-z0-9+\.\-]+)(?::[a-z0-9\-]+)?(?:\s*\(([><=~]+)\s*([^\)]+)\))?")
+        for content in field_content.values():
+            for item in content.split(","):
+                clean_item = item.strip()
+                if not clean_item or clean_item.startswith("${"):
+                    continue
+                first_alt = clean_item.split("|")[0].strip()
+                m = entry_pattern.match(first_alt)
+                if m:
+                    pkg = m.group(1).strip()
+                    ver = m.group(3).strip() if m.group(3) else ""
+                    if pkg and not pkg.startswith("${") and pkg not in seen:
+                        seen.add(pkg)
+                        packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
     if cvss_score >= 9.0:
@@ -1753,6 +1877,7 @@ async def scan_dependencies(
     conda_packages: Dict[str, str] = {}
     helm_packages: Dict[str, str] = {}
     opam_packages: Dict[str, str] = {}
+    debian_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1783,6 +1908,9 @@ async def scan_dependencies(
         ("gradle.lockfile", parse_gradle_lockfile),
         ("libs.versions.toml", parse_gradle_version_catalog),
         ("gradle/libs.versions.toml", parse_gradle_version_catalog),
+        ("build.sbt", parse_sbt_file),
+        ("deps.edn", parse_clojure_deps_edn),
+        ("project.clj", parse_leiningen_project_clj),
     ]
     packagist_parsers = [
         ("composer.lock", parse_composer_lock),
@@ -1842,6 +1970,10 @@ async def scan_dependencies(
     helm_parsers = [
         ("Chart.yaml", parse_helm_chart),
         ("Chart.lock", parse_helm_chart),
+    ]
+    debian_parsers = [
+        ("debian/control", parse_debian_control),
+        ("control", parse_debian_control),
     ]
 
     for filename, parser in python_parsers:
@@ -2183,6 +2315,21 @@ async def scan_dependencies(
                 if pkg not in helm_packages or (ver and not helm_packages[pkg]):
                     helm_packages[pkg] = ver
 
+    for filename, parser in debian_parsers:
+        file_path = os.path.join(path, filename)
+        if target_files is not None:
+            target_matched = any(
+                os.path.abspath(f) == os.path.abspath(file_path) or os.path.basename(f) == filename
+                for f in target_files
+            )
+            if not target_matched:
+                continue
+
+        if os.path.exists(file_path):
+            for pkg, ver in parser(file_path):
+                if pkg not in debian_packages or (ver and not debian_packages[pkg]):
+                    debian_packages[pkg] = ver
+
     opam_files = []
     if target_files is not None:
         opam_files = [f for f in target_files if f.endswith(".opam") or os.path.basename(f) == "opam"]
@@ -2224,7 +2371,7 @@ async def scan_dependencies(
                 if pkg not in gha_packages or (ver and not gha_packages[pkg]):
                     gha_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages or conda_packages or helm_packages or opam_packages):
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages or conda_packages or helm_packages or opam_packages or debian_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -2251,6 +2398,7 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "PyPI") for pkg, ver in conda_packages.items()]
         + [_query_osv(pkg, ver, "Bitnami") for pkg, ver in helm_packages.items()]
         + [_query_osv(pkg, ver, "opam") for pkg, ver in opam_packages.items()]
+        + [_query_osv(pkg, ver, "Debian") for pkg, ver in debian_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

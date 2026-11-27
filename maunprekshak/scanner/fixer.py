@@ -46,6 +46,11 @@ Supports:
 - TF025: at_rest_encryption_enabled / transit_encryption_enabled = false -> true
 - DF018: strip --insecure, -k, and --no-check-certificate from RUN curl/wget
 - MP098: AutoAddPolicy -> RejectPolicy
+- TF028: scan_on_push = false -> scan_on_push = true (ECR image scan)
+- TF029: encrypted = false -> encrypted = true (Redshift cluster encryption)
+- DF019: apt-get install -> append --no-install-recommends
+- MP099: public_exponent / e < 65537 -> 65537
+- MP100: SESSION_COOKIE_HTTPONLY/SECURE = False -> True, CSRF_COOKIE_HTTPONLY = False -> True
 """
 import os
 import re
@@ -56,10 +61,11 @@ FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
     "MP069", "MP073", "MP076", "MP077", "MP083", "MP090", "MP098",
+    "MP099", "MP100",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
     "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011", "TF016", "TF017",
-    "TF019", "TF020", "TF024", "TF025",
-    "DF002", "DF006", "DF011", "DF013", "DF016", "DF018",
+    "TF019", "TF020", "TF024", "TF025", "TF028", "TF029",
+    "DF002", "DF006", "DF011", "DF013", "DF016", "DF018", "DF019",
 }
 
 
@@ -327,6 +333,27 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
             elif finding.check_id == "MP098":
                 new_line = re.sub(r"\bAutoAddPolicy\(\)", "RejectPolicy()", new_line)
                 new_line = re.sub(r"\bAutoAddPolicy\b", "RejectPolicy", new_line)
+
+            elif finding.check_id == "TF028":
+                new_line = re.sub(r"\bscan_on_push\s*=\s*false\b", "scan_on_push = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "TF029":
+                new_line = re.sub(r"\bencrypted\s*=\s*false\b", "encrypted = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF019":
+                if re.search(r"\bapt-get\s+install\b", new_line, flags=re.IGNORECASE) and "--no-install-recommends" not in new_line:
+                    new_line = re.sub(r"(\bapt-get\s+install\b)", r"\1 --no-install-recommends", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "MP099":
+                new_line = re.sub(r"\bpublic_exponent\s*=\s*\d+\b", "public_exponent=65537", new_line)
+                new_line = re.sub(r"\be\s*=\s*\d+\b", "e=65537", new_line)
+
+            elif finding.check_id == "MP100":
+                new_line = re.sub(r"\bSESSION_COOKIE_HTTPONLY\s*=\s*False\b", "SESSION_COOKIE_HTTPONLY = True", new_line)
+                new_line = re.sub(r"\bSESSION_COOKIE_SECURE\s*=\s*False\b", "SESSION_COOKIE_SECURE = True", new_line)
+                new_line = re.sub(r"\bCSRF_COOKIE_HTTPONLY\s*=\s*False\b", "CSRF_COOKIE_HTTPONLY = True", new_line)
+                new_line = re.sub(r"\bhttponly\s*=\s*False\b", "httponly=True", new_line)
+                new_line = re.sub(r"\bsecure\s*=\s*False\b", "secure=True", new_line)
 
             if new_line != line:
                 lines[line_idx] = new_line

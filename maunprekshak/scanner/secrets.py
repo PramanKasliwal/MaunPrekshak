@@ -80,6 +80,12 @@ PATTERNS = {
     "Bitly Access Token": r"(?i)(?:bitly.*token|BITLY_TOKEN)\s*[:=]\s*['\"][0-9a-fA-F]{40}['\"]",
     "Yandex Cloud IAM Token": r"\bt1\.[A-Za-z0-9_\-]{60,}\b",
     "Sentry User Auth Token": r"\bsntryu_[a-f0-9]{64}\b",
+    "SonarQube Token": r"\b(?:sqp|sqa|squ)_[a-f0-9]{40}\b",
+    "Alibaba Cloud AccessKey ID": r"\bLTAI[0-9a-zA-Z]{16,24}\b",
+    "Figma Personal Access Token": r"\bfigd_[A-Za-z0-9_\-]{40,}\b",
+    "JFrog Artifactory Token": r"\bAKCP[a-zA-Z0-9]{64}\b",
+    "Dynatrace API Token": r"\bdt0c01\.[A-Za-z0-9]{24}\.[A-Za-z0-9]{64}\b",
+    "Fly.io Access Token": r"\b(?:fo1_[a-zA-Z0-9_\-]{43,}|FlyV1\s+[A-Za-z0-9_\-]{43,})\b",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 
