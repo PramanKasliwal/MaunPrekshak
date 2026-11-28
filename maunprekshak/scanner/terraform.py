@@ -33,6 +33,10 @@ Rules:
   TF028 (HIGH)     - AWS ECR repository missing image scan on push or tag immutability disabled
   TF029 (HIGH)     - AWS Redshift cluster missing encryption at rest (encrypted = false)
   TF030 (MEDIUM)   - AWS CloudWatch Log Group retention set to indefinite or never expire (retention_in_days = 0)
+  TF031 (HIGH)     - AWS RDS database or cluster deletion protection disabled (deletion_protection = false)
+  TF032 (HIGH)     - AWS S3 bucket MFA delete or Object Lock disabled (mfa_delete = "Disabled" or object_lock_enabled = false)
+  TF033 (HIGH)     - AWS API Gateway stage cache data unencrypted (cache_data_encrypted = false)
+  TF034 (MEDIUM)   - AWS VPC Flow Log traffic type not set to ALL (traffic_type = "REJECT" or "ACCEPT")
 """
 
 import os
@@ -600,6 +604,46 @@ def scan_single_terraform_file(file_path: str) -> List[SASTFinding]:
                         raw,
                     ))
                     redshift_flagged = True
+
+        # ─── TF031: AWS RDS Deletion Protection Disabled ─────────────────────
+        if re.search(r"""\bdeletion_protection\s*=\s*false\b""", line_lower):
+            if not _is_suppressed(raw, "TF031"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF031", Severity.HIGH.value,
+                    "AWS RDS database instance or cluster has deletion protection disabled (deletion_protection = false)",
+                    "Set deletion_protection = true to protect RDS databases from accidental deletion or termination.",
+                    raw,
+                ))
+
+        # ─── TF032: AWS S3 Bucket MFA Delete or Object Lock Disabled ─────────
+        if re.search(r"""(?:mfa_delete\s*=\s*["'](?:disabled|false)["']|object_lock_enabled\s*=\s*false\b)""", line_lower):
+            if not _is_suppressed(raw, "TF032"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF032", Severity.HIGH.value,
+                    "AWS S3 bucket has MFA delete or Object Lock disabled (mfa_delete = 'Disabled' or object_lock_enabled = false)",
+                    "Enable MFA delete or S3 Object Lock to prevent accidental or malicious deletion of S3 objects.",
+                    raw,
+                ))
+
+        # ─── TF033: AWS API Gateway Stage Cache Data Unencrypted ─────────────
+        if re.search(r"""\bcache_data_encrypted\s*=\s*false\b""", line_lower):
+            if not _is_suppressed(raw, "TF033"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF033", Severity.HIGH.value,
+                    "AWS API Gateway stage or method cache data encryption is disabled (cache_data_encrypted = false)",
+                    "Set cache_data_encrypted = true to encrypt cached API Gateway response payloads at rest.",
+                    raw,
+                ))
+
+        # ─── TF034: AWS VPC Flow Log Traffic Type Not ALL ─────────────────────
+        if re.search(r"""traffic_type\s*=\s*['"](?:reject|accept)['"]""", line_lower):
+            if not _is_suppressed(raw, "TF034"):
+                findings.append(_make_finding(
+                    file_path, lineno, "TF034", Severity.MEDIUM.value,
+                    "AWS VPC Flow Log configured with traffic_type not set to 'ALL' (traffic_type = 'REJECT' or 'ACCEPT')",
+                    "Set traffic_type = 'ALL' to capture both accepted and rejected network traffic for security monitoring.",
+                    raw,
+                ))
 
         # ─── TF001 & TF010: Security Group Open Ingress Tracking ─────────────
         if "ingress" in line_lower or "aws_security_group" in line_lower:

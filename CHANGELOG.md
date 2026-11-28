@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-11-28
+
+### Added
+- **Multi-Ecosystem SCA Phase 12 (Alpine Linux APKBUILD, RPM spec *.spec, and Bazel MODULE.bazel / WORKSPACE)**:
+  - Native manifest parsing for Alpine Linux packaging manifests:
+    - `APKBUILD`: parses package definitions (`pkgname`, `pkgver`) as well as dependencies from `depends` and `makedepends`, mapped to OSV ecosystem `"Alpine"`.
+  - Native manifest parsing for RPM package spec files:
+    - `*.spec`: parses package metadata (`Name:`, `Version:`) and dependencies from `Requires:` and `BuildRequires:`, mapped to OSV ecosystem `"AlmaLinux"`.
+  - Native manifest parsing for Google Bazel build definitions:
+    - `MODULE.bazel`, `WORKSPACE`, `WORKSPACE.bazel`: parses `maven.artifact(...)` rules and `artifacts = ["group:artifact:version"]` lists, mapped to OSV ecosystem `"Maven"`.
+- **Cloud-Native & Container Security Expansion**:
+  - **`TF031`** (HIGH): AWS RDS database or cluster deletion protection disabled (`deletion_protection = false`).
+  - **`TF032`** (HIGH): AWS S3 bucket MFA delete or Object Lock disabled (`mfa_delete = "Disabled"` or `object_lock_enabled = false`).
+  - **`TF033`** (HIGH): AWS API Gateway stage cache data unencrypted (`cache_data_encrypted = false`).
+  - **`TF034`** (MEDIUM): AWS VPC Flow Log configured with traffic_type not set to ALL (`traffic_type = "REJECT"` or `"ACCEPT"`).
+  - **`DF021`** (HIGH): Insecure Docker daemon socket mount or reference detected (`/var/run/docker.sock` in container build or execution layers).
+  - **`DF022`** (HIGH): Plaintext secrets or credentials baked into container image metadata via `ENV` or `ARG` instructions.
+- **Advanced AST SAST Rules Phase 12 (`MP105`–`MP110`)**:
+  - **`MP105`** (HIGH): Insecure XML Parsing via `minidom.parse()` / `minidom.parseString()` vulnerable to XML entity expansion / Billion Laughs attack (CWE-776).
+  - **`MP106`** (HIGH): Insecure Redis connection without authentication (`redis.Redis` / `redis.StrictRedis` missing password parameter or `password=None`) (CWE-306).
+  - **`MP107`** (HIGH): Insecure HTTP request with disabled SSL verification in `urllib3` / `aiohttp` / `httpx` (`cert_reqs='CERT_NONE'`, `ssl=False`, or `verify=False`) (CWE-295).
+  - **`MP108`** (HIGH): Sensitive credential or authentication token logging in logger calls (`logger.info/debug/error` with passwords, API keys, or tokens in arguments/f-strings) (CWE-532).
+  - **`MP109`** (HIGH): Insecure temporary directory creation via `tempfile.mkdtemp()` lacking context-manager cleanup or restrictive permissions (CWE-378).
+  - **`MP110`** (HIGH): Insecure symmetric cipher mode: Electronic Codebook (ECB) mode usage (`modes.ECB()`, `AES.MODE_ECB`) lacking ciphertext diffusion (CWE-327).
+- **DevOps & Cloud Secrets Detection Phase 12 (`MP-SEC-075`–`MP-SEC-080`)**:
+  - High-precision token patterns for:
+    - Groq API Keys (`\bgsk_[a-zA-Z0-9]{48,}\b`).
+    - Tailscale Auth / API Keys (`\btskey-(?:auth|api|k)[a-zA-Z0-9_\-]{20,}\b`).
+    - Datadog App Keys (`DD_APP_KEY = "[0-9a-fA-F]{40}"`).
+    - Linear Webhook Signing Secrets (`\blin_wh_[a-zA-Z0-9]{32,}\b`).
+    - Sentry DSN Secret Keys (`https://<key>:<secret>@<host>/<project>`).
+    - Mistral AI API Keys (`MISTRAL_API_KEY = "[a-zA-Z0-9]{32}"`).
+- **Deterministic Mechanical Auto-Fixing Engine Phase 12 (`--fix` Expansion)**:
+  - `TF031`: Automatically enable RDS deletion protection: `deletion_protection = false` $\rightarrow$ `deletion_protection = true`.
+  - `TF033`: Automatically enable API Gateway cache encryption: `cache_data_encrypted = false` $\rightarrow$ `cache_data_encrypted = true` and `authorization = "NONE"` $\rightarrow$ `authorization = "AWS_IAM"`.
+  - `DF020`: Automatically strip insecure package installation flags (`--trusted-host`, `--unsafe-perm`, `--ignore-engines`).
+  - `MP107`: Automatically restore SSL verification: `verify=False` $\rightarrow$ `verify=True`, `ssl=False` $\rightarrow$ `ssl=True`, `cert_reqs='CERT_NONE'` $\rightarrow$ `cert_reqs='CERT_REQUIRED'`.
+  - `MP110`: Automatically upgrade symmetric cipher mode: `AES.MODE_ECB` $\rightarrow$ `AES.MODE_GCM`, `modes.ECB()` $\rightarrow$ `modes.GCM(nonce)`.
+
 ## [0.22.0] - 2026-11-27
 
 ### Added

@@ -86,6 +86,12 @@ PATTERNS = {
     "JFrog Artifactory Token": r"\bAKCP[a-zA-Z0-9]{64}\b",
     "Dynatrace API Token": r"\bdt0c01\.[A-Za-z0-9]{24}\.[A-Za-z0-9]{64}\b",
     "Fly.io Access Token": r"\b(?:fo1_[a-zA-Z0-9_\-]{43,}|FlyV1\s+[A-Za-z0-9_\-]{43,})\b",
+    "Groq API Key": r"\bgsk_[a-zA-Z0-9]{48,}\b",
+    "Tailscale Auth / API Key": r"\btskey-(?:auth|api|k)[a-zA-Z0-9_\-]{20,}\b",
+    "Datadog App Key": r"(?i)(?:datadog.*app_key|DD_APP_KEY)\s*[:=]\s*['\"][0-9a-fA-F]{40}['\"]",
+    "Linear Webhook Signing Secret": r"\blin_wh_[a-zA-Z0-9]{32,}\b",
+    "Sentry DSN Secret": r"https://[a-f0-9]{32}:[a-f0-9]{32}@[a-z0-9\.\-]+/[0-9]+",
+    "Mistral AI API Key": r"(?i)(?:mistral.*api_key|MISTRAL_API_KEY)\s*[:=]\s*['\"][a-zA-Z0-9]{32}['\"]",
     "Generic Secret": r"(?i)(secret|token|password|api_key)\s*[:=]\s*['\"][A-Za-z0-9\-_]{16,}['\"]"
 }
 

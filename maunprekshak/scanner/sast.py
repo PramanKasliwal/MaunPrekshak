@@ -115,6 +115,12 @@ from maunprekshak.scanner.report import SASTFinding, Severity
 # MP102  random.seed predictable constant initialization HIGH
 # MP103  yaml.dump Dumper=yaml.Dumper code execution HIGH
 # MP104  shutil.unpack_archive Zip Slip traversal HIGH
+# MP105  Insecure XML parsing (minidom Billion Laughs) HIGH
+# MP106  Insecure Redis missing auth password         HIGH
+# MP107  Insecure HTTP disabled SSL verification       HIGH
+# MP108  Sensitive credential/token logging (CWE-532)  HIGH
+# MP109  Insecure temp directory creation (mkdtemp)    HIGH
+# MP110  Insecure symmetric ECB cipher mode (CWE-327)  HIGH
 
 
 class SecurityVisitor(ast.NodeVisitor):
@@ -1625,6 +1631,144 @@ class SecurityVisitor(ast.NodeVisitor):
                 "Path traversal vulnerability: shutil.unpack_archive without extraction path validation is susceptible to Zip Slip directory traversal",
                 "Validate archive member paths before extraction using zipfile/tarfile or ensure extract_dir is strictly sanitized with os.path.commonpath."
             )
+
+        # MP105 — Insecure XML parsing via minidom.parse / minidom.parseString (Billion Laughs / entity expansion)
+        if (
+            func_name in ("parse", "parseString")
+            and "defused" not in full_func
+            and "defused" not in obj
+            and (obj in ("minidom", "xml.dom.minidom") or full_func.endswith((".minidom.parse", ".minidom.parseString", "minidom.parse", "minidom.parseString")))
+        ):
+            self._add(
+                node, "MP105", Severity.HIGH.value,
+                "Insecure XML parsing: xml.dom.minidom.parse/parseString is vulnerable to XML entity expansion (Billion Laughs) and denial of service",
+                "Use defusedxml.minidom.parse/parseString or defusedxml package to parse untrusted XML documents securely."
+            )
+
+        # MP106 — Insecure Redis client connection without password authentication
+        if (
+            func_name in ("Redis", "StrictRedis")
+            or (obj == "redis" and method in ("Redis", "StrictRedis"))
+            or full_func.endswith(("redis.Redis", "redis.StrictRedis"))
+        ):
+            has_password = False
+            for kw in node.keywords:
+                if kw.arg == "password":
+                    if not (isinstance(kw.value, ast.Constant) and (kw.value.value is None or kw.value.value == "")):
+                        has_password = True
+            if not has_password:
+                self._add(
+                    node, "MP106", Severity.HIGH.value,
+                    "Insecure Redis connection: redis client instantiated without an authentication password exposes datastore to unauthorized access",
+                    "Provide an explicit, non-empty password parameter (e.g. password=os.environ['REDIS_PASSWORD']) or use redis.from_url with auth credentials."
+                )
+
+        # MP107 — Insecure HTTP request with disabled SSL verification in urllib3 / aiohttp / httpx
+        if (
+            func_name in ("PoolManager", "TCPConnector", "Client", "AsyncClient")
+            or method in ("PoolManager", "TCPConnector", "Client", "AsyncClient")
+            or any(h in full_func for h in ("urllib3", "aiohttp", "httpx"))
+        ):
+            has_disabled_ssl = False
+            for kw in node.keywords:
+                if kw.arg == "cert_reqs" and isinstance(kw.value, ast.Constant) and str(kw.value.value).upper() in ("CERT_NONE", "NONE"):
+                    has_disabled_ssl = True
+                    break
+                elif kw.arg == "ssl" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    has_disabled_ssl = True
+                    break
+                elif kw.arg == "verify" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    has_disabled_ssl = True
+                    break
+            if has_disabled_ssl:
+                self._add(
+                    node, "MP107", Severity.HIGH.value,
+                    "Insecure SSL/TLS certificate verification disabled: HTTP client configured with cert_reqs='CERT_NONE', ssl=False, or verify=False allows Man-in-the-Middle (MITM) attacks",
+                    "Enable SSL certificate verification (e.g. verify=True, ssl=True, or cert_reqs='CERT_REQUIRED') to validate remote server certificates."
+                )
+
+        # MP108 — Sensitive credential or token logging (CWE-532)
+        if (
+            method in ("debug", "info", "warning", "warn", "error", "critical", "exception", "log")
+            and (obj in ("logging", "logger", "log") or "log" in obj.lower() or "logger" in full_func.lower())
+        ):
+            has_sensitive_log = False
+            sensitive_keywords = {"password", "passwd", "token", "secret", "api_key", "access_token", "auth_token", "credit_card"}
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id.lower() in sensitive_keywords:
+                    has_sensitive_log = True
+                    break
+                elif isinstance(arg, ast.JoinedStr):
+                    for part in arg.values:
+                        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                            p_lower = part.value.lower()
+                            if any(f"{kw}:" in p_lower or f"{kw}=" in p_lower or f"{kw} is" in p_lower for kw in sensitive_keywords):
+                                has_sensitive_log = True
+                                break
+                        elif isinstance(part, ast.FormattedValue):
+                            if isinstance(part.value, ast.Name) and part.value.id.lower() in sensitive_keywords:
+                                has_sensitive_log = True
+                                break
+                    if has_sensitive_log:
+                        break
+            if has_sensitive_log:
+                self._add(
+                    node, "MP108", Severity.HIGH.value,
+                    "Sensitive credential logging: logging statements containing credentials, passwords, or authentication tokens leak secrets to log streams (CWE-532)",
+                    "Redact or sanitize sensitive credentials before writing to log streams. Use structured masking or avoid logging authentication secrets."
+                )
+
+        # MP109 — Insecure temporary directory creation (mkdtemp)
+        if (
+            func_name == "mkdtemp"
+            or method == "mkdtemp"
+            or full_func.endswith("tempfile.mkdtemp")
+            or (obj == "tempfile" and method == "mkdtemp")
+        ):
+            self._add(
+                node, "MP109", Severity.HIGH.value,
+                "Insecure temporary directory creation: tempfile.mkdtemp() creates persistent directories on disk without context-manager cleanup or restrictive umask enforcement",
+                "Use tempfile.TemporaryDirectory() with a context manager (with tempfile.TemporaryDirectory() as tmpdir:) to ensure automatic cleanup and secure directory permissions."
+            )
+
+        # MP110 — Insecure symmetric cipher mode: Electronic Codebook (ECB) mode usage
+        if (
+            func_name == "ECB"
+            or method == "ECB"
+            or full_func.endswith("modes.ECB")
+            or (obj == "modes" and method == "ECB")
+        ):
+            self._add(
+                node, "MP110", Severity.HIGH.value,
+                "Insecure symmetric cipher mode: Electronic Codebook (ECB) mode lacks ciphertext diffusion and reveals plaintext patterns under encryption (CWE-327)",
+                "Use authenticated encryption modes such as GCM (Galois/Counter Mode) or ChaCha20-Poly1305 instead of ECB mode."
+            )
+        elif (
+            func_name == "new"
+            or method == "new"
+            or full_func.endswith(("AES.new", "DES.new", "Blowfish.new"))
+        ):
+            is_ecb = False
+            for arg in node.args:
+                if isinstance(arg, ast.Attribute) and arg.attr == "MODE_ECB":
+                    is_ecb = True
+                    break
+                elif isinstance(arg, ast.Name) and arg.id == "MODE_ECB":
+                    is_ecb = True
+                    break
+            for kw in node.keywords:
+                if isinstance(kw.value, ast.Attribute) and kw.value.attr == "MODE_ECB":
+                    is_ecb = True
+                    break
+                elif isinstance(kw.value, ast.Name) and kw.value.id == "MODE_ECB":
+                    is_ecb = True
+                    break
+            if is_ecb:
+                self._add(
+                    node, "MP110", Severity.HIGH.value,
+                    "Insecure symmetric cipher mode: Electronic Codebook (ECB) mode lacks ciphertext diffusion and reveals plaintext patterns under encryption (CWE-327)",
+                    "Use authenticated encryption modes such as GCM (Galois/Counter Mode) or ChaCha20-Poly1305 instead of ECB mode."
+                )
 
     def visit_Dict(self, node: ast.Dict) -> None:
         # MP072 — NoSQL Injection (MongoDB $where clause)

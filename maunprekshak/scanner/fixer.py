@@ -51,6 +51,11 @@ Supports:
 - DF019: apt-get install -> append --no-install-recommends
 - MP099: public_exponent / e < 65537 -> 65537
 - MP100: SESSION_COOKIE_HTTPONLY/SECURE = False -> True, CSRF_COOKIE_HTTPONLY = False -> True
+- TF031: deletion_protection = false -> true
+- TF033: cache_data_encrypted = false -> true / authorization = "NONE" -> "AWS_IAM"
+- DF020: strip --trusted-host, --unsafe-perm, --ignore-engines
+- MP107: verify/ssl=False -> True, cert_reqs='CERT_NONE' -> 'CERT_REQUIRED'
+- MP110: AES.MODE_ECB -> AES.MODE_GCM, modes.ECB() -> modes.GCM(nonce)
 """
 import os
 import re
@@ -61,11 +66,11 @@ FIXABLE_RULES = {
     "MP012", "MP014", "MP015", "MP023", "MP031", "MP033", "MP036",
     "MP051", "MP054", "MP059", "MP060", "MP063", "MP068",
     "MP069", "MP073", "MP076", "MP077", "MP083", "MP090", "MP098",
-    "MP099", "MP100",
+    "MP099", "MP100", "MP107", "MP110",
     "K8S001", "K8S003", "K8S006", "K8S007", "K8S009", "K8S011", "K8S019",
     "GHA004", "TF004", "TF005", "TF006", "TF009", "TF011", "TF016", "TF017",
-    "TF019", "TF020", "TF024", "TF025", "TF028", "TF029",
-    "DF002", "DF006", "DF011", "DF013", "DF016", "DF018", "DF019",
+    "TF019", "TF020", "TF024", "TF025", "TF028", "TF029", "TF031", "TF033",
+    "DF002", "DF006", "DF011", "DF013", "DF016", "DF018", "DF019", "DF020",
 }
 
 
@@ -354,6 +359,29 @@ def fix_file_findings(file_path: str, findings: List[SASTFinding]) -> int:
                 new_line = re.sub(r"\bCSRF_COOKIE_HTTPONLY\s*=\s*False\b", "CSRF_COOKIE_HTTPONLY = True", new_line)
                 new_line = re.sub(r"\bhttponly\s*=\s*False\b", "httponly=True", new_line)
                 new_line = re.sub(r"\bsecure\s*=\s*False\b", "secure=True", new_line)
+
+            elif finding.check_id == "TF031":
+                new_line = re.sub(r"\bdeletion_protection\s*=\s*false\b", "deletion_protection = true", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "TF033":
+                if re.search(r"\bcache_data_encrypted\s*=\s*false\b", new_line, flags=re.IGNORECASE):
+                    new_line = re.sub(r"\bcache_data_encrypted\s*=\s*false\b", "cache_data_encrypted = true", new_line, flags=re.IGNORECASE)
+                elif re.search(r"""\bauthorization\s*=\s*['"]NONE['"]""", new_line, flags=re.IGNORECASE):
+                    new_line = re.sub(r"""\bauthorization\s*=\s*['"]NONE['"]""", 'authorization = "AWS_IAM"', new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "DF020":
+                new_line = re.sub(r"\s+--trusted-host(?:\s+|=)[^\s]+", "", new_line)
+                new_line = re.sub(r"\s+--unsafe-perm(?:=[^\s]+)?", "", new_line)
+                new_line = re.sub(r"\s+--ignore-engines", "", new_line)
+
+            elif finding.check_id == "MP107":
+                new_line = re.sub(r"\bverify\s*=\s*False\b", "verify=True", new_line)
+                new_line = re.sub(r"\bssl\s*=\s*False\b", "ssl=True", new_line)
+                new_line = re.sub(r"""\bcert_reqs\s*=\s*['"](?:CERT_NONE|NONE)['"]""", "cert_reqs='CERT_REQUIRED'", new_line, flags=re.IGNORECASE)
+
+            elif finding.check_id == "MP110":
+                new_line = re.sub(r"\bAES\.MODE_ECB\b", "AES.MODE_GCM", new_line)
+                new_line = re.sub(r"\bmodes\.ECB\(\)", "modes.GCM(nonce)", new_line)
 
             if new_line != line:
                 lines[line_idx] = new_line

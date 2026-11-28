@@ -1725,6 +1725,136 @@ def parse_debian_control(file_path: str) -> List[tuple[str, str]]:
     return packages
 
 
+def parse_apkbuild(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an Alpine Linux APKBUILD manifest and extract package and dependencies.
+    Extracts from pkgname/pkgver, depends, and makedepends.
+    """
+    packages: List[tuple[str, str]] = []
+    seen = set()
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Extract pkgname and pkgver
+        m_name = re.search(r'^\s*pkgname\s*=\s*["\']?([a-zA-Z0-9_\.\-]+)["\']?', content, re.MULTILINE)
+        m_ver = re.search(r'^\s*pkgver\s*=\s*["\']?([0-9][a-zA-Z0-9_\.\-]*)["\']?', content, re.MULTILINE)
+        if m_name and m_ver:
+            p_name = m_name.group(1).strip()
+            p_ver = m_ver.group(1).strip()
+            if p_name and p_name not in seen:
+                seen.add(p_name)
+                packages.append((p_name, p_ver))
+
+        # Extract depends and makedepends
+        for dep_match in re.finditer(r'(?:^|\n)\s*(?:make)?depends\s*=\s*(?:(["\'])(.*?)\1|([^\n]+))', content, re.DOTALL):
+            dep_block = dep_match.group(2) if dep_match.group(2) is not None else (dep_match.group(3) or "")
+            for token in dep_block.split():
+                clean_tok = token.strip()
+                if not clean_tok or clean_tok.startswith(("#", "$")):
+                    continue
+                m = re.match(r'^([a-zA-Z0-9_\.\-]+)(?:([><=~]+)(.+))?$', clean_tok)
+                if m:
+                    pkg = m.group(1).strip()
+                    ver = m.group(3).strip() if m.group(3) else ""
+                    if pkg and pkg not in seen:
+                        seen.add(pkg)
+                        packages.append((pkg, ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_rpm_spec(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse an RPM spec file (*.spec) and extract package name, version, and dependencies.
+    Extracts from Name, Version, Requires, and BuildRequires tags.
+    """
+    packages: List[tuple[str, str]] = []
+    seen = set()
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        pkg_name = ""
+        pkg_ver = ""
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#") or line_str.startswith("%"):
+                continue
+
+            if ":" in line_str:
+                tag, _, val = line_str.partition(":")
+                clean_tag = tag.strip().lower()
+                clean_val = val.strip()
+
+                if clean_tag == "name" and not pkg_name:
+                    pkg_name = clean_val
+                elif clean_tag == "version" and not pkg_ver:
+                    pkg_ver = clean_val
+                elif clean_tag in ("requires", "buildrequires"):
+                    items = [it.strip() for it in clean_val.split(",") if it.strip()]
+                    for item in items:
+                        m = re.match(r'^([a-zA-Z0-9_\.\-\+]+)(?:\s*([><=]+)\s*([0-9a-zA-Z\.\-_]+))?', item)
+                        if m:
+                            p = m.group(1).strip()
+                            v = m.group(3).strip() if m.group(3) else ""
+                            if p and not p.startswith("%") and p not in seen:
+                                seen.add(p)
+                                packages.append((p, v))
+
+        if pkg_name and not pkg_name.startswith("%") and pkg_name not in seen:
+            seen.add(pkg_name)
+            packages.append((pkg_name, pkg_ver))
+    except Exception:
+        pass
+    return packages
+
+
+def parse_bazel_dependencies(file_path: str) -> List[tuple[str, str]]:
+    """
+    Parse Bazel MODULE.bazel, WORKSPACE, or WORKSPACE.bazel files and extract Maven dependencies.
+    Extracts maven.artifact(...) calls and artifacts = ["group:artifact:version"] list entries.
+    """
+    packages: List[tuple[str, str]] = []
+    seen = set()
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Pattern 1: maven.artifact("group", "artifact", "version")
+        for m in re.finditer(r'maven\.artifact\(\s*["\']([^"\'\:]+)["\']\s*,\s*["\']([^"\'\:]+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)', content):
+            grp, art, ver = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+            coord = f"{grp}:{art}"
+            if coord not in seen:
+                seen.add(coord)
+                packages.append((coord, ver))
+
+        # Pattern 2: maven.artifact(group = "...", artifact = "...", version = "...")
+        for m in re.finditer(r'maven\.artifact\s*\(([^)]+)\)', content):
+            block = m.group(1)
+            g_m = re.search(r'group\s*=\s*["\']([^"\'\:]+)["\']', block)
+            a_m = re.search(r'artifact\s*=\s*["\']([^"\'\:]+)["\']', block)
+            v_m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', block)
+            if g_m and a_m:
+                coord = f"{g_m.group(1).strip()}:{a_m.group(1).strip()}"
+                ver = v_m.group(1).strip() if v_m else ""
+                if coord not in seen:
+                    seen.add(coord)
+                    packages.append((coord, ver))
+
+        # Pattern 3: "group:artifact:version" in artifacts = [...] or standalone in Bazel
+        for m in re.finditer(r'["\']([a-zA-Z0-9_\.\-]+:[a-zA-Z0-9_\.\-]+):([0-9][0-9a-zA-Z\.\-_]*)["\']', content):
+            coord = m.group(1).strip()
+            ver = m.group(2).strip()
+            if coord not in seen:
+                seen.add(coord)
+                packages.append((coord, ver))
+    except Exception:
+        pass
+    return packages
+
+
 def _cvss_to_severity(cvss_score: float) -> str:
     """Map a CVSS v3 score to a severity label."""
     if cvss_score >= 9.0:
@@ -1847,6 +1977,10 @@ async def scan_dependencies(
     Looks for Conda manifests: environment.yml, environment.yaml
     Looks for Helm manifests: Chart.yaml, Chart.lock
     Looks for OCaml manifests: *.opam, opam
+    Looks for Debian manifests: debian/control
+    Looks for Alpine manifests: APKBUILD
+    Looks for RPM manifests: *.spec
+    Looks for Bazel manifests: MODULE.bazel, WORKSPACE, WORKSPACE.bazel
 
     Args:
         path: Absolute path to the project root directory.
@@ -1878,6 +2012,8 @@ async def scan_dependencies(
     helm_packages: Dict[str, str] = {}
     opam_packages: Dict[str, str] = {}
     debian_packages: Dict[str, str] = {}
+    alpine_packages: Dict[str, str] = {}
+    rpm_packages: Dict[str, str] = {}
 
     python_parsers = [
         ("poetry.lock", parse_poetry_lock),
@@ -1911,6 +2047,9 @@ async def scan_dependencies(
         ("build.sbt", parse_sbt_file),
         ("deps.edn", parse_clojure_deps_edn),
         ("project.clj", parse_leiningen_project_clj),
+        ("MODULE.bazel", parse_bazel_dependencies),
+        ("WORKSPACE", parse_bazel_dependencies),
+        ("WORKSPACE.bazel", parse_bazel_dependencies),
     ]
     packagist_parsers = [
         ("composer.lock", parse_composer_lock),
@@ -2371,7 +2510,45 @@ async def scan_dependencies(
                 if pkg not in gha_packages or (ver and not gha_packages[pkg]):
                     gha_packages[pkg] = ver
 
-    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages or conda_packages or helm_packages or opam_packages or debian_packages):
+    alpine_files = []
+    if target_files is not None:
+        alpine_files = [f for f in target_files if os.path.basename(f) == "APKBUILD"]
+    else:
+        try:
+            for root_dir, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "dist", "build", "venv", ".venv")]
+                for file in files:
+                    if file == "APKBUILD":
+                        alpine_files.append(os.path.join(root_dir, file))
+        except Exception:
+            pass
+
+    for apk_file in alpine_files:
+        if os.path.exists(apk_file):
+            for pkg, ver in parse_apkbuild(apk_file):
+                if pkg not in alpine_packages or (ver and not alpine_packages[pkg]):
+                    alpine_packages[pkg] = ver
+
+    rpm_files = []
+    if target_files is not None:
+        rpm_files = [f for f in target_files if f.endswith(".spec")]
+    else:
+        try:
+            for root_dir, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "dist", "build", "venv", ".venv")]
+                for file in files:
+                    if file.endswith(".spec"):
+                        rpm_files.append(os.path.join(root_dir, file))
+        except Exception:
+            pass
+
+    for spec_file in rpm_files:
+        if os.path.exists(spec_file):
+            for pkg, ver in parse_rpm_spec(spec_file):
+                if pkg not in rpm_packages or (ver and not rpm_packages[pkg]):
+                    rpm_packages[pkg] = ver
+
+    if not (python_packages or npm_packages or go_packages or cargo_packages or maven_packages or packagist_packages or nuget_packages or pub_packages or rubygems_packages or hex_packages or swift_packages or conan_packages or vcpkg_packages or hackage_packages or cocoapods_packages or cran_packages or gha_packages or julia_packages or homebrew_packages or conda_packages or helm_packages or opam_packages or debian_packages or alpine_packages or rpm_packages):
         return []
 
     # Fan out all OSV queries concurrently across ecosystems
@@ -2399,6 +2576,8 @@ async def scan_dependencies(
         + [_query_osv(pkg, ver, "Bitnami") for pkg, ver in helm_packages.items()]
         + [_query_osv(pkg, ver, "opam") for pkg, ver in opam_packages.items()]
         + [_query_osv(pkg, ver, "Debian") for pkg, ver in debian_packages.items()]
+        + [_query_osv(pkg, ver, "Alpine") for pkg, ver in alpine_packages.items()]
+        + [_query_osv(pkg, ver, "AlmaLinux") for pkg, ver in rpm_packages.items()]
     )
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

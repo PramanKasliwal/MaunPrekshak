@@ -408,6 +408,38 @@ def scan_single_dockerfile(file_path: str) -> List[SASTFinding]:
                     code_snippet=raw_line.strip(),
                 ))
 
+        # DF021 — Insecure Docker daemon socket mount or reference
+        if "/var/run/docker.sock" in full_inst.lower() or "docker.sock" in full_inst.lower():
+            if not _is_suppressed(raw_line, "DF021"):
+                findings.append(SASTFinding(
+                    file_path=file_path,
+                    line=line_num,
+                    col=1,
+                    check_id="DF021",
+                    severity=Severity.HIGH.value,
+                    description="Insecure Docker daemon socket mount or reference detected (/var/run/docker.sock)",
+                    recommendation="Avoid mounting or referencing the host Docker daemon socket into build stages or container layers. Use rootless container builders or isolated daemon environments.",
+                    code_snippet=raw_line.strip(),
+                ))
+
+        # DF022 — Plaintext secrets or credentials baked into image metadata via ENV/ARG
+        if (inst_upper.startswith("ENV ") or inst_upper.startswith("ARG ")) and (
+            re.search(r"""\b(?:AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|API_KEY|SECRET_KEY|PRIVATE_KEY|PASSWORD|AUTH_TOKEN)\b\s*[= ]\s*['"]?[a-zA-Z0-9_\-\.\/+=]{8,}['"]?""", full_inst, re.IGNORECASE)
+        ):
+            f_lower = full_inst.lower()
+            if not any(dummy in f_lower for dummy in ("dummy", "changeme", "placeholder", "your_", "example", "none", "null")):
+                if not _is_suppressed(raw_line, "DF022"):
+                    findings.append(SASTFinding(
+                        file_path=file_path,
+                        line=line_num,
+                        col=1,
+                        check_id="DF022",
+                        severity=Severity.HIGH.value,
+                        description="Plaintext secret or credential baked into container image metadata via ENV/ARG instruction",
+                        recommendation="Never store secrets in ENV or ARG instructions as they persist in image history. Use secret mounts (RUN --mount=type=secret) or runtime secrets managers.",
+                        code_snippet=raw_line.strip(),
+                    ))
+
     # DF001 — Missing USER or running as root
     if (not has_user_directive or last_user_is_root) and lines:
         flag_line = last_user_line if last_user_is_root else 1
